@@ -100,7 +100,7 @@ The goal is the smallest version that a trainer can use with real trainees. Wher
 
 ## Risks
 
-- **Meta business verification and template approval** are slow and outside our control, so start milestone 0 right away.
+- **Meta business verification and template approval** are slow and outside our control, so start milestone 6 while building the dashboard (milestone 4).
 - **Health data under GDPR.** Keep all GCP resources in EU regions, and note that the Anthropic API processes message text (check its data-processing terms and retention). The paper consent should mention both.
 - **Parsing mistakes.** Every save is confirmed back to the trainee, and corrections are supported. The dashboard shows the original message next to each entry so the trainer can check it.
 - **Cost:** Claude tokens per message and Meta template fees per reminder. Estimate both once message volumes are known.
@@ -109,19 +109,21 @@ The goal is the smallest version that a trainer can use with real trainees. Wher
 
 ### MVP
 
-0. **Accounts**
-   - Meta Business account, Meta developer app with the WhatsApp product, and its free test number (it can message up to 5 whitelisted numbers – enough for milestones 1–3).
-   - Start Meta business verification early; it can take days to weeks.
-   - Add your personal number as a test recipient so you can chat with the bot as a trainee during development.
-   - Get the production bot number: a Polish prepaid SIM (decided – not a personal number, which would lose its WhatsApp account), never registered on WhatsApp. It only has to receive one verification SMS or call – no device stays connected – but keep the number active so it can be re-verified later.
-   - Choose the bot's display name (Meta reviews it).
+0. **Developer setup** (no business verification needed)
+   - Meta developer account (free, uses a personal Facebook login) and a Meta app with the WhatsApp product. Creating the app asks for a business portfolio – just a name, no documents.
+   - Use the app's free test number; add your personal number as a test recipient (up to 5) so you can chat with the bot as a trainee.
    - GCP project in `europe-central2`.
 1. **Echo bot** – webhook verification, signature check, dedup, reply; tested locally via tunnel.
 2. **Submissions** – trainee lookup by phone, database, Claude tools for saving entries, confirmations.
 3. **Conversation** – chat history, clarifications, plan questions, corrections.
 4. **Dashboard** – trainer login, trainee registration, plan editing, weight chart, check-in history, last-report view.
 5. **Reminders** – per-trainee schedules, Meta templates, Cloud Scheduler.
-6. **Production** – Cloud Run deploy, Cloud SQL, Secret Manager, basic logging and alerting on errors.
+6. **Go-live accounts** – start around milestone 4, since Meta's steps can take days to weeks.
+   - Meta business verification (company documents); unverified accounts have low messaging limits.
+   - Production bot number: a Polish prepaid SIM (decided – not a personal number, which would lose its WhatsApp account), never registered on WhatsApp. It only has to receive one verification SMS or call – no device stays connected – but keep the number active so it can be re-verified later.
+   - Bot display name (Meta reviews it).
+   - Submit the Polish reminder templates for approval.
+7. **Production** – Cloud Run deploy, Cloud SQL, Secret Manager, basic logging and alerting on errors.
 
 ### After the MVP
 
