@@ -109,12 +109,17 @@ The goal is the smallest version that a trainer can use with real trainees. Wher
 
 ### MVP
 
-0. **Developer setup** (no business verification needed)
-   - Meta developer account (free, uses a personal Facebook login) and a Meta app with the WhatsApp product. Creating the app asks for a business portfolio – just a name, no documents.
-   - Use the app's free test number; add your personal number as a test recipient (up to 5) so you can chat with the bot as a trainee.
-   - GCP project in `europe-central2`.
-1. **Echo bot** – webhook verification, signature check, dedup, reply; tested locally via tunnel.
-2. **Submissions** – trainee lookup by phone, database, Claude tools for saving entries, confirmations.
+0. **Developer setup** ✅ done (2026-10-29)
+   - Meta developer account (free, uses a personal Facebook login) and a Meta app with the WhatsApp product. Creating the app asks for a business portfolio – just a name, no documents. Meta's prompts to verify the business can be ignored for development.
+   - The app's free test number sends to your personal number (a test recipient; up to 5), so you can chat with the bot as a trainee. `scripts/send_test.py` sends a template message using the settings in `.env`; the temporary access token expires after about 24 h, and also stops working early when it's regenerated or app settings change. A System User token with expiration *Never* avoids the daily renewal (see README).
+   - Webhooks need two things: the `messages` field subscribed in the app's webhook configuration, **and** the app subscribed to the WhatsApp Business Account (`POST /<WABA_ID>/subscribed_apps` with the access token). The dashboard's Test button works without the second, real messages don't. Repeat this for the production account in milestone 6.
+
+Milestones 1–5 are developed and run **locally** (`bash run.sh` migrates the database, sends a test message and starts the bot; see README): FastAPI on the laptop, a cloudflared/ngrok tunnel for Meta's webhook, and a SQLite file as the database. GCP is set up in milestone 7, where SQLite is replaced by Cloud SQL Postgres. To keep that switch easy, all database access goes through SQLAlchemy and Alembic, avoids SQLite- and Postgres-specific features, and stores timestamps in UTC.
+
+1. **Echo bot** ✅ done (2026-10-29) – webhook verification, signature check, dedup, reply; tested locally via tunnel.
+2. **Submissions** 🚧 in progress – trainee lookup by phone, database, Claude tools for saving entries, confirmations.
+   - Done (2026-10-29): Claude (`src/wabot/assistant.py`) replies in Polish instead of the echo, using the trainee's last 20 messages from the past 24 h and today's date in Warsaw. Nothing is saved yet besides the messages themselves, so the bot says it "noted" a report. Model is set by `CLAUDE_MODEL` (default Claude Opus 5.5, low effort; server-side refusal fallback on).
+   - Next: `trainers` and `trainees` tables with lookup by phone (fixed reply for unknown numbers), entry tables, the `save_*` tools, and a CLI command to register a test trainer and trainee until the dashboard exists.
 3. **Conversation** – chat history, clarifications, plan questions, corrections.
 4. **Dashboard** – trainer login, trainee registration, plan editing, weight chart, check-in history, last-report view.
 5. **Reminders** – per-trainee schedules, Meta templates, Cloud Scheduler.
@@ -123,7 +128,7 @@ The goal is the smallest version that a trainer can use with real trainees. Wher
    - Production bot number: a Polish prepaid SIM (decided – not a personal number, which would lose its WhatsApp account), never registered on WhatsApp. It only has to receive one verification SMS or call – no device stays connected – but keep the number active so it can be re-verified later.
    - Bot display name (Meta reviews it).
    - Submit the Polish reminder templates for approval.
-7. **Production** – Cloud Run deploy, Cloud SQL, Secret Manager, basic logging and alerting on errors.
+7. **Production** – GCP project in `europe-central2`, Cloud Run deploy, Cloud SQL, Secret Manager, basic logging and alerting on errors. Replace the temporary access token with a permanent System User token.
 
 ### After the MVP
 

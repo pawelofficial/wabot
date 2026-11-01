@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local SQLite database
+wabot.db*
+
+# Scratch files that may contain tokens or IDs
+temp.txt
+screen*.png
