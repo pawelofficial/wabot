@@ -1,16 +1,13 @@
 import logging
-from datetime import datetime, timedelta
 from typing import Annotated
 
-import anthropic
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from wabot import assistant, whatsapp
+from wabot import assistant, conversation, whatsapp
 from wabot.config import Settings, get_settings
 from wabot.db import SessionLocal, get_session
 from wabot.models import Message, utcnow
@@ -51,7 +48,12 @@ async def receive_webhook(
     ):
         raise HTTPException(status_code=401)
 
-    for msg in whatsapp.parse_messages(await request.json()):
+    payload = await request.json()
+    for status in whatsapp.failed_statuses(payload):
+        # E.g. 131047 when a free-form message is sent outside the 24 h window.
+        log.warning("WhatsApp could not deliver %s: %s", status.get("id"), status.get("errors"))
+
+    for msg in whatsapp.parse_messages(payload):
         session.add(
             Message(wamid=msg.wamid, direction="in", phone=msg.phone, type=msg.type, body=msg.text)
         )
@@ -67,19 +69,7 @@ async def receive_webhook(
     return {"status": "ok"}
 
 
-HISTORY_WINDOW = timedelta(hours=24)
-HISTORY_LIMIT = 20
-
-
-def recent_history(session: Session, phone: str, now: datetime) -> list[Message]:
-    """The trainee's last messages within the history window, oldest first."""
-    newest_first = session.scalars(
-        select(Message)
-        .where(Message.phone == phone, Message.created_at >= now - HISTORY_WINDOW)
-        .order_by(Message.created_at.desc(), Message.id.desc())
-        .limit(HISTORY_LIMIT)
-    )
-    return list(reversed(newest_first.all()))
+APOLOGY = "Przepraszam, mam chwilowy problem. Spróbuj proszę za kilka minut."
 
 
 def reply(msg: whatsapp.InboundMessage) -> None:
@@ -89,21 +79,19 @@ def reply(msg: whatsapp.InboundMessage) -> None:
     else:
         now = utcnow()
         with SessionLocal() as session:
-            history = recent_history(session, msg.phone, now)
+            history = conversation.recent_history(session, msg.phone, now)
         try:
             text = assistant.generate_reply(settings, history, now)
-        except anthropic.APIError:
-            log.exception("Claude call for %s failed", msg.wamid)
-            text = "Przepraszam, mam chwilowy problem. Spróbuj proszę za kilka minut."
+        except assistant.MissingApiKeyError as e:
+            log.error("Can't reply to %s: %s", msg.wamid, e)
+            text = APOLOGY
+        except Exception:
+            log.exception("LLM call for %s failed", msg.wamid)
+            text = APOLOGY
     try:
-        wamid = whatsapp.send_text(settings, msg.phone, text)
+        conversation.send_and_store(settings, msg.phone, text)
     except httpx.HTTPStatusError as e:
         # Meta explains the problem in the response body.
         log.error("Sending reply to %s failed: %s", msg.wamid, e.response.text)
-        return
     except Exception:
         log.exception("Sending reply to %s failed", msg.wamid)
-        return
-    with SessionLocal() as session:
-        session.add(Message(wamid=wamid, direction="out", phone=msg.phone, type="text", body=text))
-        session.commit()

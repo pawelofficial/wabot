@@ -1,6 +1,6 @@
 # wabot
 
-A WhatsApp assistant for personal trainers. Trainees send short reports (weight, training, diet) to a WhatsApp bot; Claude understands them and replies in Polish, and the trainer sees everything on a dashboard.
+A WhatsApp assistant for personal trainers. Trainees send short reports (weight, training, diet) to a WhatsApp bot; an LLM (OpenAI) understands them and replies in Polish, and the trainer sees everything on a dashboard.
 
 Planned features:
 
@@ -17,11 +17,11 @@ The full plan, decisions and milestones are in [docs/PLAN.md](docs/PLAN.md).
 
 - ✅ Milestone 0 – Meta developer app with the free test number
 - ✅ Milestone 1 – webhook, signature check, dedup, replies
-- 🚧 Milestone 2 – Claude replies in Polish from the recent chat history; saving reports to the database is next
+- 🚧 Milestone 2 – LLM replies in Polish from the recent chat history; saving reports to the database is next
 
 ## Stack
 
-Python 3.12+, FastAPI, SQLAlchemy + Alembic (SQLite locally, Postgres in production), Meta WhatsApp Cloud API, Anthropic API. Tooling: `uv`, `ruff`, `pytest`.
+Python 3.12+, FastAPI, SQLAlchemy + Alembic (SQLite locally, Postgres in production), Meta WhatsApp Cloud API, OpenAI API (Responses). Tooling: `uv`, `ruff`, `pytest`.
 
 ## Local development
 
@@ -41,8 +41,9 @@ cp .env.example .env    # then fill in the values
 | `WHATSAPP_TEST_RECIPIENT` | Your own number, digits only (e.g. `48123456789`), added as a recipient on API Setup |
 | `WHATSAPP_APP_SECRET` | App settings → Basic → App secret |
 | `WHATSAPP_VERIFY_TOKEN` | Any random string you choose; you enter the same value in Meta's webhook settings |
-| `ANTHROPIC_API_KEY` | console.anthropic.com → API Keys |
-| `CLAUDE_MODEL` | Optional, defaults to `claude-opus-5-5` |
+| `OPENAI_API_KEY` | platform.openai.com → API keys |
+| `OPENAI_MODEL` | Optional, defaults to `gpt-5.4-mini` |
+| `HARDCODED_FIRST_MESSAGE` | Optional. `True` makes messages the bot starts come from `src/wabot/utils.py` instead of the LLM – useful without an API key |
 
 `.env` is gitignored; never commit it.
 
@@ -81,6 +82,15 @@ In the Meta app, open the WhatsApp **Configuration** page (`developers.facebook.
 
 Then send the bot a message from your phone.
 
+### Send a message from the bot
+
+```bash
+uv run python scripts/send_test_custom_first_message.py            # compose, send and store
+uv run python scripts/send_test_custom_first_message.py --dry-run  # only print it
+```
+
+The text is composed by the app: the LLM writes it, or `hardcoded_first_message()` in `src/wabot/utils.py` does when `HARDCODED_FIRST_MESSAGE=True`. What the LLM is told to write is in `src/wabot/prompts.yaml`. WhatsApp only delivers such free-form messages within 24 h of your last message to the bot – outside that window Meta accepts the request but drops the message, and the running bot logs error `131047`. Message the bot first.
+
 ### Tests and lint
 
 ```bash
@@ -96,4 +106,5 @@ uv run ruff check . && uv run ruff format .
 | `HTTP 403 … (#131005) Access denied` | Token was invalidated (regenerated or app settings changed) – generate a new one |
 | "The callback URL or verify token couldn't be validated" | Callback URL missing `/webhook`, tunnel not running, or verify token mismatch – check the uvicorn log |
 | Meta's *Test* button works, real messages don't | App not subscribed to the WhatsApp Business Account (step 5.3) |
-| Bot doesn't pick up a changed `.env` | Restart it – settings are read at startup |
+| Bot's message accepted but never arrives; bot logs `131047` | Outside the 24 h window – message the bot first |
+| Bot doesn't pick up a changed `.env` or `prompts.yaml` | Restart it – both are read at startup (`run.sh` reloads on `prompts.yaml` changes by itself) |

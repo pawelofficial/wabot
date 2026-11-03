@@ -13,7 +13,8 @@ os.environ.update(
     WHATSAPP_PHONE_NUMBER_ID="123",
     WHATSAPP_APP_SECRET="test-secret",
     WHATSAPP_VERIFY_TOKEN="test-verify",
-    ANTHROPIC_API_KEY="test-anthropic-key",
+    OPENAI_API_KEY="test-openai-key",
+    HARDCODED_FIRST_MESSAGE="false",
 )
 
 from fastapi.testclient import TestClient  # noqa: E402

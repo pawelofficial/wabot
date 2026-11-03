@@ -1,6 +1,6 @@
 # wabot – project plan
 
-A WhatsApp assistant for personal trainers. Trainees report weight, training and diet adherence in free-form Polish messages; Claude turns them into structured records, holds short back-and-forth conversations, and answers questions about the trainee's arrangement with their trainer. Trainers manage everything in a web dashboard.
+A WhatsApp assistant for personal trainers. Trainees report weight, training and diet adherence in free-form Polish messages; an LLM turns them into structured records, holds short back-and-forth conversations, and answers questions about the trainee's arrangement with their trainer. Trainers manage everything in a web dashboard.
 
 ## Decisions
 
@@ -14,7 +14,7 @@ A WhatsApp assistant for personal trainers. Trainees report weight, training and
 | Trainer interface | Dashboard only (trainers don't chat with the bot) |
 | WhatsApp number | One shared bot number for all trainers; trainees are mapped to their trainer by phone number |
 | Consent (GDPR) | Collected on paper, offline; the app only records that it's on file |
-| Photos | Stored and shown on the dashboard; not sent to Claude (after the MVP) |
+| Photos | Stored and shown on the dashboard; not sent to the LLM (after the MVP) |
 | Trainer accounts | Created by hand by the operator |
 
 ## Trainee onboarding
@@ -33,23 +33,23 @@ Because consent is collected on paper, **the trainer registers each trainee in t
 | Reply to a reminder | Reminder: "Jak dziś z dietą?" → "dobrze, bez odstępstw" | Interpreted in context of the reminder (it's part of the chat history) |
 | Photo | progress or meal photo | After the MVP: stored in Cloud Storage and shown on the dashboard. In the MVP: a fixed reply that photos aren't supported yet; any caption is processed like a normal message |
 
-## Claude's role
+## The LLM's role
 
-One Claude call per inbound message, with:
+One LLM call per inbound message, with:
 
 - **Recent history** – the trainee's last messages within a short window (e.g. 24 h, capped at N messages), including the bot's replies and reminders, so clarifications and replies to reminders work.
 - **Write tools** – `save_weight`, `save_training`, `save_diet`, `correct_entry`.
 - **Read tools** – `get_training_plan`, `get_diet_plan`, `get_trainer_notes`, `get_recent_entries`.
 - **The trainee's local date** in the turn, so "wczoraj" / "w poniedziałek" resolve correctly.
 
-The trainee identity is resolved server-side from the sender's phone number and bound to the tools; tools never take a trainee ID from the model, so one trainee can't reach another's data. Claude writes the reply text (in Polish).
+The trainee identity is resolved server-side from the sender's phone number and bound to the tools; tools never take a trainee ID from the model, so one trainee can't reach another's data. The LLM writes the reply text (in Polish).
 
 ## Reminders
 
 - The trainer sets a reminder schedule per trainee in the dashboard (e.g. weigh-in Mon/Thu 8:00, diet check daily 21:00, training check after planned session days).
 - Cloud Scheduler calls the service every ~15 min; it finds reminders that are due (in each trainee's timezone) and sends them.
 - WhatsApp only allows free-form business messages within 24 h of the trainee's last message. Outside that window, reminders must use **Meta-approved message templates** (category: utility, language: `pl`). Templates are paid per delivered message – check current Meta pricing for Poland.
-- Sent reminders are stored in the trainee's chat history so Claude understands the reply.
+- Sent reminders are stored in the trainee's chat history so the LLM understands the reply.
 - Dashboard "missed report" = no matching submission within some time after a reminder or schedule slot.
 
 ## Dashboard (trainer only)
@@ -68,7 +68,7 @@ The trainee identity is resolved server-side from the sender's phone number and 
 | WhatsApp | Meta WhatsApp Cloud API (direct) |
 | Bot + dashboard | Python, FastAPI on Cloud Run (`europe-central2`) |
 | Async processing | Webhook verifies signature, stores message (unique `wamid` = dedup), acks 200, enqueues Cloud Task |
-| AI | Anthropic Python SDK, tool use |
+| AI | OpenAI Python SDK (Responses API), tool use; default model `gpt-5.4-mini` (switched from Anthropic on 2026-11-01 – existing OpenAI credit) |
 | Database | Cloud SQL Postgres, SQLAlchemy + Alembic |
 | Files | Cloud Storage (photos) |
 | Scheduling | Cloud Scheduler → reminders endpoint |
@@ -92,7 +92,7 @@ The trainee identity is resolved server-side from the sender's phone number and 
 The goal is the smallest version that a trainer can use with real trainees. Where a question came up, the MVP takes the simplest answer:
 
 - **Trainer accounts** are created by hand by the operator (a small CLI command plus a Firebase Auth user). No sign-up page.
-- **Chat history** sent to Claude is the trainee's last 20 messages from the past 24 h.
+- **Chat history** sent to the LLM is the trainee's last 20 messages from the past 24 h.
 - **Corrections** apply to the trainee's latest entry of that type only.
 - **Missed reports:** the dashboard shows the date of each trainee's last weight, training and diet report, and highlights any older than a few days. There are no rules tied to the reminder schedule.
 - **Reminders:** a simple per-trainee schedule (days of the week plus a time) for each report type, with one Meta template per type.
@@ -101,9 +101,9 @@ The goal is the smallest version that a trainer can use with real trainees. Wher
 ## Risks
 
 - **Meta business verification and template approval** are slow and outside our control, so start milestone 6 while building the dashboard (milestone 4).
-- **Health data under GDPR.** Keep all GCP resources in EU regions, and note that the Anthropic API processes message text (check its data-processing terms and retention). The paper consent should mention both.
+- **Health data under GDPR.** Keep all GCP resources in EU regions, and note that the OpenAI API processes message text (requests are sent with `store=false`) (check its data-processing terms and retention). The paper consent should mention both.
 - **Parsing mistakes.** Every save is confirmed back to the trainee, and corrections are supported. The dashboard shows the original message next to each entry so the trainer can check it.
-- **Cost:** Claude tokens per message and Meta template fees per reminder. Estimate both once message volumes are known.
+- **Cost:** LLM tokens per message and Meta template fees per reminder. Estimate both once message volumes are known.
 
 ## Milestones
 
@@ -117,8 +117,8 @@ The goal is the smallest version that a trainer can use with real trainees. Wher
 Milestones 1–5 are developed and run **locally** (`bash run.sh` migrates the database, sends a test message and starts the bot; see README): FastAPI on the laptop, a cloudflared/ngrok tunnel for Meta's webhook, and a SQLite file as the database. GCP is set up in milestone 7, where SQLite is replaced by Cloud SQL Postgres. To keep that switch easy, all database access goes through SQLAlchemy and Alembic, avoids SQLite- and Postgres-specific features, and stores timestamps in UTC.
 
 1. **Echo bot** ✅ done (2026-10-29) – webhook verification, signature check, dedup, reply; tested locally via tunnel.
-2. **Submissions** 🚧 in progress – trainee lookup by phone, database, Claude tools for saving entries, confirmations.
-   - Done (2026-10-29): Claude (`src/wabot/assistant.py`) replies in Polish instead of the echo, using the trainee's last 20 messages from the past 24 h and today's date in Warsaw. Nothing is saved yet besides the messages themselves, so the bot says it "noted" a report. Model is set by `CLAUDE_MODEL` (default Claude Opus 5.5, low effort; server-side refusal fallback on).
+2. **Submissions** 🚧 in progress – trainee lookup by phone, database, LLM tools for saving entries, confirmations.
+   - Done (2026-10-29): the LLM (`src/wabot/assistant.py`; OpenAI since 2026-11-01) replies in Polish instead of the echo, using the trainee's last 20 messages from the past 24 h and today's date in Warsaw. Nothing is saved yet besides the messages themselves, so the bot says it "noted" a report. Model is set by `CLAUDE_MODEL` (default the LLM Opus 5.5, low effort; server-side refusal fallback on).
    - Next: `trainers` and `trainees` tables with lookup by phone (fixed reply for unknown numbers), entry tables, the `save_*` tools, and a CLI command to register a test trainer and trainee until the dashboard exists.
 3. **Conversation** – chat history, clarifications, plan questions, corrections.
 4. **Dashboard** – trainer login, trainee registration, plan editing, weight chart, check-in history, last-report view.

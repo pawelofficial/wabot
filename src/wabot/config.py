@@ -20,8 +20,12 @@ class Settings(DatabaseSettings):
     whatsapp_verify_token: str
     graph_api_version: str = "v25.0"
 
-    anthropic_api_key: str
-    claude_model: str = "claude-opus-5-5"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-5.4-mini"
+    # Use utils.hardcoded_first_message() instead of the LLM for messages the bot starts.
+    hardcoded_first_message: bool = False
+    # Your own number (digits only); where the scripts send test messages.
+    whatsapp_test_recipient: str | None = None
     # Until trainees have their own timezone (milestone 2).
     default_timezone: str = "Europe/Warsaw"
 

@@ -12,4 +12,4 @@ if ! uv run python scripts/send_test.py; then
     echo "WARNING: test message failed - check WHATSAPP_TOKEN in .env (it expires after ~24 h)." >&2
 fi
 
-exec uv run uvicorn wabot.main:app --reload "$@"
+exec uv run uvicorn wabot.main:app --reload --reload-include "*.yaml" "$@"

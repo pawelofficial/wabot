@@ -61,8 +61,8 @@ def sent(monkeypatch) -> list[tuple[str, str]]:
 
 
 @pytest.fixture
-def claude(monkeypatch) -> list[list[Message]]:
-    """Replace Claude with a stub; records the history it was given."""
+def llm(monkeypatch) -> list[list[Message]]:
+    """Replace the LLM with a stub; records the history it was given."""
     histories = []
 
     def fake_generate_reply(settings, history, now):
@@ -97,7 +97,7 @@ def test_rejects_bad_signature(client, sent):
     assert sent == []
 
 
-def test_replies_with_claude_and_stores_both_messages(client, sent, claude):
+def test_replies_with_the_llm_and_stores_both_messages(client, sent, llm):
     response = post_signed(client, text_payload("wamid.1", "82,4 rano"))
     assert response.status_code == 200
     assert sent == [("48111222333", "Odpowiedź 1")]
@@ -108,7 +108,7 @@ def test_replies_with_claude_and_stores_both_messages(client, sent, claude):
     assert inbound.created_at.tzinfo is not None
 
 
-def test_duplicate_delivery_is_ignored(client, sent, claude):
+def test_duplicate_delivery_is_ignored(client, sent, llm):
     post_signed(client, text_payload("wamid.1", "hej"))
     post_signed(client, text_payload("wamid.1", "hej"))
     assert len(sent) == 1
@@ -124,12 +124,12 @@ def test_status_updates_are_ignored(client, sent):
     assert sent == []
 
 
-def test_history_includes_previous_turns_of_the_same_trainee(client, sent, claude):
+def test_history_includes_previous_turns_of_the_same_trainee(client, sent, llm):
     post_signed(client, text_payload("wamid.1", "82"))
     post_signed(client, text_payload("wamid.other", "hej", phone="48999888777"))
     post_signed(client, text_payload("wamid.2", "kg"))
 
-    last = claude[-1]
+    last = llm[-1]
     assert [(m.direction, m.body) for m in last] == [
         ("in", "82"),
         ("out", "Odpowiedź 1"),
@@ -137,14 +137,14 @@ def test_history_includes_previous_turns_of_the_same_trainee(client, sent, claud
     ]
 
 
-def test_claude_turns_start_with_the_trainee():
+def test_llm_turns_start_with_the_trainee():
     history = [
         Message(direction="out", phone="1", type="template", body=None),
         Message(direction="in", phone="1", type="text", body="hej"),
         Message(direction="out", phone="1", type="text", body="Cześć!"),
         Message(direction="in", phone="1", type="image", body=None),
     ]
-    assert assistant.to_claude_messages(history) == [
+    assert assistant.to_llm_messages(history) == [
         {"role": "user", "content": "hej"},
         {"role": "assistant", "content": "Cześć!"},
         {"role": "user", "content": "[wiadomość typu image]"},

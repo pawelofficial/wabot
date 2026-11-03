@@ -42,6 +42,17 @@ def parse_messages(payload: dict) -> list[InboundMessage]:
     return messages
 
 
+def failed_statuses(payload: dict) -> list[dict]:
+    """Delivery status updates that report a failed outbound message."""
+    return [
+        status
+        for entry in payload.get("entry", [])
+        for change in entry.get("changes", [])
+        for status in change.get("value", {}).get("statuses", [])
+        if status.get("status") == "failed"
+    ]
+
+
 def send_text(settings: Settings, to: str, text: str) -> str:
     """Send a free-form text message; only allowed within 24 h of the trainee's last message.
 
