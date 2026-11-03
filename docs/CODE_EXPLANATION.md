@@ -90,7 +90,7 @@ Things to notice:
 - **Saving comes before sending.** The trainee only gets a confirmation for what is actually in the db.
 - **Errors never reach the trainee as a stack trace.** A failed LLM call or save sends `APOLOGY`; a failed send is only logged.
 
-`GET /webhook` (`verify_webhook()`) is separate: Meta calls it once when the Callback URL is set, and the bot answers with `hub.challenge` if `hub.verify_token` matches `WHATSAPP_VERIFY_TOKEN`. `GET /` is a health check that `set_webhook.py` uses to see that the tunnel is up.
+`GET /webhook` (`verify_webhook()`) is separate: Meta calls it once when the Callback URL is set, and the bot answers with `hub.challenge` if `hub.verify_token` matches `WHATSAPP_VERIFY_TOKEN`. `GET /` is a plain health check (open `<tunnel url>/` in a browser to see that the bot is reachable).
 
 ## Flow 2: the LLM call
 
@@ -213,13 +213,22 @@ run.sh
        wait up to 30 s for https://xxx.trycloudflare.com in the log
        → scripts/set_webhook.py <url>
            app ID from WHATSAPP_APP_ID or GET /app with the token
-           wait until GET <url>/ returns 200 (the bot is up behind the tunnel)
-           POST /{app_id}/subscriptions with callback_url=<url>/webhook
-             → Meta immediately calls GET /webhook (verify_webhook) to check it
+           every 5 s, for up to 2 minutes (WAIT_FOR_TUNNEL, RETRY_EVERY):
+             POST /{app_id}/subscriptions with callback_url=<url>/webhook,
+                  the verify token and the app token (app ID | app secret)
+               → Meta immediately calls GET <url>/webhook (verify_webhook) to check it
+             Meta reached the bot → print "Webhook set: <url>/webhook", done
+             Meta couldn't (tunnel not live yet, bot not up) → try again
+           still failing after 2 minutes → exit with Meta's error;
+             run.sh then prints "WARNING: set the Callback URL by hand: <url>/webhook"
   5. uv run uvicorn wabot.main:app --reload --reload-include "*.yaml"   (foreground)
 ```
 
-Steps 4 and 5 run at the same time: `set_webhook.py` waits for the bot started in step 5.
+Steps 4 and 5 run at the same time: `set_webhook.py` keeps retrying until the bot started in step 5 answers Meta through the tunnel.
+
+- **Wait for `Webhook set: …`** before sending a message. Until then Meta still sends messages to the previous tunnel, which is gone, and they're lost (Meta doesn't redeliver them to the new URL).
+- **Every run gets a new tunnel address**, so the webhook is set again on every start. Ctrl+C stops uvicorn and cloudflared together. If port 8000 is still taken afterwards, an old uvicorn is still running. Stop it before starting again.
+- **Meta's check is the test, not one from your laptop.** A new trycloudflare.com address can take a while to resolve on your machine (a VPN's DNS, for example) even though Meta already reaches it, so the script doesn't try the URL itself.
 
 ## Flow 5: registering a trainee (`scripts/add_trainee.py`)
 

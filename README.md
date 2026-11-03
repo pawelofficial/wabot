@@ -69,7 +69,7 @@ bash run.sh
 This applies database migrations, sends a test template message to your phone (so you know the token works), starts a [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) quick tunnel, points Meta's webhook at it (`scripts/set_webhook.py`, the same as editing the Callback URL in the Meta dashboard) and runs the bot on http://localhost:8000. Ctrl+C stops the bot and the tunnel.
 
 - cloudflared is looked up on `PATH`, then at `~/tools/cloudflared.exe`; set `CLOUDFLARED=…` for another location. Its output goes to `.cloudflared.log`.
-- The tunnel URL changes on every start; `run.sh` re-registers it each time, so there's nothing to copy by hand.
+- The tunnel URL changes on every start; `run.sh` re-registers it each time, so there's nothing to copy by hand. Wait for `Webhook set: https://….trycloudflare.com/webhook` in the terminal (up to 2 minutes) before writing to the bot. Messages sent before that go to the old tunnel and are lost.
 - `PORT=8001 bash run.sh` uses another port; `TUNNEL=0 bash run.sh` skips the tunnel and leaves Meta's webhook as it is.
 - The script finds the app ID through `WHATSAPP_TOKEN`; set `WHATSAPP_APP_ID` (App settings → Basic) to skip that lookup.
 
