@@ -154,3 +154,54 @@ def test_every_example_plan_exercise_is_in_the_catalog():
         if re.match(r"\d+\. ", line) and not any(name in line for name in names)
     ]
     assert missing == []
+
+
+def chat(*turns: tuple[str, str]) -> list[Message]:
+    return [Message(direction=d, phone="48111222333", type="text", body=b) for d, b in turns]
+
+
+REPORTED = chat(
+    ("in", "yanek waga 81,9"),
+    ("out", "Zanotowałem 81,9 kg."),
+    ("in", "przysiady 4x8"),
+    ("in", "yanek zapisz"),
+)
+
+
+def is_marker(turn: dict) -> bool:
+    return turn["role"] == "developer" and "NOWE WIADOMOŚCI" in turn["content"]
+
+
+def test_marked_history_puts_the_marker_after_the_bots_last_message():
+    turns = assistant.reply_input(Settings(), REPORTED)
+    assert [t["content"] for t in turns if not is_marker(t)] == [m.body for m in REPORTED]
+    assert is_marker(turns[2])
+    assert sum(is_marker(t) for t in turns) == 1
+
+
+def test_new_only_history_keeps_just_the_new_report():
+    turns = assistant.reply_input(Settings(history_mode="new_only"), REPORTED)
+    assert turns == [
+        {"role": "user", "content": "przysiady 4x8"},
+        {"role": "user", "content": "yanek zapisz"},
+    ]
+
+
+@pytest.mark.parametrize("mode", ["marked", "new_only"])
+def test_without_a_bot_message_everything_is_new_and_unmarked(mode):
+    history = chat(("in", "82"), ("in", "yanek zanotuj"))
+    turns = assistant.reply_input(Settings(history_mode=mode), history)
+    assert [t["content"] for t in turns] == ["82", "yanek zanotuj"]
+
+
+def test_reply_call_sends_the_marked_history(monkeypatch):
+    sent = {}
+
+    def fake_complete(settings, instructions, messages, now, training_plan):
+        sent["messages"] = messages
+        return None
+
+    monkeypatch.setattr(assistant, "_complete", fake_complete)
+    assistant.generate_reply(Settings(), REPORTED, utcnow(), None)
+    assert is_marker(sent["messages"][2])
+    assert sent["messages"][-1]["content"].startswith("Dzisiaj jest")

@@ -35,6 +35,25 @@ def to_llm_messages(history: list[Message]) -> list[dict]:
     return turns
 
 
+def split_at_last_bot_message(history: list[Message]) -> tuple[list[Message], list[Message]]:
+    """(context, new): new is everything after the bot's last message, i.e. the report the
+    trainee is sending now; context is the rest. Without a bot message, everything is new."""
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].direction == "out":
+            return history[: i + 1], history[i + 1 :]
+    return [], history
+
+
+def reply_input(settings: Settings, history: list[Message]) -> list[dict]:
+    """The chat turns for a reply call, shaped by HISTORY_MODE (see config.py)."""
+    context, new = split_at_last_bot_message(history)
+    context_turns = to_llm_messages(context)
+    if settings.history_mode == "new_only" or not context_turns:
+        return to_llm_messages(new)
+    marker = {"role": "developer", "content": PROMPTS["new_messages_marker"].strip()}
+    return [*context_turns, marker, *to_llm_messages(new)]
+
+
 class MissingApiKeyError(Exception):
     pass
 
@@ -133,7 +152,7 @@ def generate_reply(
         settings,
         build_instructions(training_plan),
         [
-            *to_llm_messages(history),
+            *reply_input(settings, history),
             # Per-request context goes after the history so the prefix stays cacheable.
             {"role": "developer", "content": _today(settings, now)},
         ],

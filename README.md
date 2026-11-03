@@ -45,6 +45,7 @@ cp .env.example .env    # then fill in the values
 | `OPENAI_API_KEY` | platform.openai.com → API keys |
 | `OPENAI_MODEL` | Optional, defaults to `gpt-5.6-luna` |
 | `TRAINING_PLAN_FILE` | Optional, defaults to `plans/example.txt` – the training plan given to the LLM |
+| `HISTORY_MODE` | Optional. `marked` (default): the LLM gets the recent chat with a marker where the new report starts. `new_only`: the code sends only the messages since the bot's last one |
 | `HARDCODED_FIRST_MESSAGE` | Optional. `True` makes messages the bot starts come from `src/wabot/utils.py` instead of the LLM – useful without an API key |
 
 `.env` is gitignored; never commit it.

@@ -31,7 +31,7 @@ uv run python scripts/send_test_custom_first_message.py [--dry-run]   # bot-star
 - `src/wabot/models.py` – SQLAlchemy models; use `UTCDateTime` for every timestamp
 - `src/wabot/db.py` – engine and sessions (SQLite runs with WAL and a busy timeout)
 - `src/wabot/assistant.py` – LLM calls (OpenAI Responses API, `OPENAI_MODEL`): `generate_reply()` returns an `LlmOutput` (reply text + extracted `weight` / `training`), `generate_first_message()`; `build_instructions()` injects the training plan; output that fails validation is retried once with the errors
-- `src/wabot/prompts.yaml` – the LLM prompts: `system`, `training_plan` (`{training_plan}` is replaced with the plan text), `no_training_plan`, `first_message_task`; loaded at startup. Keep the field rules in sync with `llm_output.py`
+- `src/wabot/prompts.yaml` – the LLM prompts: `system`, `training_plan` (`{training_plan}` is replaced with the plan text), `no_training_plan`, `new_messages_marker` (inserted after the bot's last message, `HISTORY_MODE`), `first_message_task`; loaded at startup. Keep the field rules in sync with `llm_output.py`
 - `src/wabot/llm_output.py` – pydantic models of the LLM output (the JSON schema sent to OpenAI is generated from them) and `validate_output()`: structure, plausible values, dates, names that must be in the plan
 - `src/wabot/exercises.yaml` + `exercises.py` – exercise catalog (fixed IDs, Polish names, aliases, muscle group); injected into the prompt, and its IDs are the allowed values of `exercise_id` in the schema. IDs are permanent once data uses them – add, don't rename
 - `plans/example.txt` – example training plan (free text, as a trainer writes it), injected for every trainee until plans are in the db

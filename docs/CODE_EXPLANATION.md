@@ -85,7 +85,13 @@ generate_reply()
   │   + PROMPTS["exercise_catalog"]           with exercises.catalog_text() filled in
   │   + PROMPTS["training_plan"]              with the plan text filled in
   │     (or PROMPTS["no_training_plan"] when there is no plan)
-  ├─ to_llm_messages(history)             → [{"role": "user"|"assistant", "content": ...}, ...]
+  ├─ reply_input(settings, history)       → the chat turns, shaped by HISTORY_MODE:
+  │     split_at_last_bot_message(history) → (context, new)
+  │         new = everything after the bot's last message (the report being sent now)
+  │     HISTORY_MODE=marked (default):  context + developer "--- NOWE WIADOMOŚCI ---" + new
+  │     HISTORY_MODE=new_only:          new only (the code drops the context)
+  │     no bot message in the history:  everything is new, no marker
+  │   to_llm_messages() turns stored messages into [{"role": "user"|"assistant", "content"}]:
   │     "in" → user, "out" → assistant; non-text → "[wiadomość typu image]";
   │     leading assistant turns are dropped (the conversation must start with the trainee)
   ├─ + {"role": "developer", "content": _today()}   "Dzisiaj jest wtorek, 2026-11-03, godz. 10:15."
