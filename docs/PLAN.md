@@ -35,14 +35,18 @@ Because consent is collected on paper, **the trainer registers each trainee in t
 
 ## The LLM's role
 
-One LLM call per inbound message, with:
+The bot is called by name: only messages that mention **"yanek"** (any Polish case – "yanku", "yanka") get an LLM call and a reply. Other messages are stored and become part of the history, so a report can be spread over several messages and end with "yanek, zanotuj". Each trainee chats one-to-one with the bot's number (the trainer isn't in the chat) and is told to address reports to Yanek.
 
+One LLM call per such message, with:
+
+- **Instructions** – the static system prompt from `src/wabot/prompts.yaml`, followed by the **trainee's training plan injected** into it (free text written by the trainer). Static part first, so the shared prefix stays cacheable.
 - **Recent history** – the trainee's last messages within a short window (e.g. 24 h, capped at N messages), including the bot's replies and reminders, so clarifications and replies to reminders work.
-- **Write tools** – `save_weight`, `save_training`, `save_diet`, `correct_entry`.
-- **Read tools** – `get_training_plan`, `get_diet_plan`, `get_trainer_notes`, `get_recent_entries`.
-- **The trainee's local date** in the turn, so "wczoraj" / "w poniedziałek" resolve correctly.
+- **The trainee's local date** after the history, so "wczoraj" / "w poniedziałek" resolve correctly.
+- **Structured output** (decided 2026-11-03, replacing the write tools for now) – a JSON schema with `reply` (the Polish WhatsApp text), `weight` (`kg`, `date`) and `training` (`date`, `plan_day` as named in the plan, `status` done/partial/skipped, `exercises` with a catalog `exercise_id`, sets/reps/weight, `replaces` (the plan exercise a substitute was done instead of) and a free-text `comment`, `missed_exercises`, `notes`), each null when not reported. The app saves what it gets; only data from messages since the bot's last reply is extracted.
+- **Exercise catalog** (decided 2026-11-03) – `src/wabot/exercises.yaml` gives every exercise a fixed ID (e.g. `leg_press` for "suwnica", "wypychanie nóg", "leg press"), so progress can be charted per exercise however it's named and across plan changes. The model maps reported and planned exercises to it; the schema only allows catalog IDs, and an exercise outside the catalog gets `null` plus the trainee's name. Starts with 20 exercises maintained in the repo; trainers adding their own is a dashboard feature (milestone 4).
+- Read tools (`get_diet_plan`, `get_trainer_notes`, `get_recent_entries`) and corrections of earlier entries are still open; the training plan is injected rather than fetched by a tool.
 
-The trainee identity is resolved server-side from the sender's phone number and bound to the tools; tools never take a trainee ID from the model, so one trainee can't reach another's data. The LLM writes the reply text (in Polish).
+The trainee identity is resolved server-side from the sender's phone number and bound to the request (plan lookup, saving); the model never supplies a trainee ID, so one trainee can't reach another's data. The LLM writes the reply text (in Polish).
 
 ## Reminders
 
@@ -68,7 +72,7 @@ The trainee identity is resolved server-side from the sender's phone number and 
 | WhatsApp | Meta WhatsApp Cloud API (direct) |
 | Bot + dashboard | Python, FastAPI on Cloud Run (`europe-central2`) |
 | Async processing | Webhook verifies signature, stores message (unique `wamid` = dedup), acks 200, enqueues Cloud Task |
-| AI | OpenAI Python SDK (Responses API), tool use; default model `gpt-5.4-mini` (switched from Anthropic on 2026-11-01 – existing OpenAI credit) |
+| AI | OpenAI Python SDK (Responses API), tool use; default model `gpt-5.6-luna` (switched from Anthropic on 2026-11-01 – existing OpenAI credit; from `gpt-5.4-mini` to Luna on 2026-11-03 – about 4x cheaper and as good in tests) |
 | Database | Cloud SQL Postgres, SQLAlchemy + Alembic |
 | Files | Cloud Storage (photos) |
 | Scheduling | Cloud Scheduler → reminders endpoint |
@@ -117,9 +121,10 @@ The goal is the smallest version that a trainer can use with real trainees. Wher
 Milestones 1–5 are developed and run **locally** (`bash run.sh` migrates the database, sends a test message and starts the bot; see README): FastAPI on the laptop, a cloudflared/ngrok tunnel for Meta's webhook, and a SQLite file as the database. GCP is set up in milestone 7, where SQLite is replaced by Cloud SQL Postgres. To keep that switch easy, all database access goes through SQLAlchemy and Alembic, avoids SQLite- and Postgres-specific features, and stores timestamps in UTC.
 
 1. **Echo bot** ✅ done (2026-10-29) – webhook verification, signature check, dedup, reply; tested locally via tunnel.
-2. **Submissions** 🚧 in progress – trainee lookup by phone, database, LLM tools for saving entries, confirmations.
-   - Done (2026-10-29): the LLM (`src/wabot/assistant.py`; OpenAI since 2026-11-01) replies in Polish instead of the echo, using the trainee's last 20 messages from the past 24 h and today's date in Warsaw. Nothing is saved yet besides the messages themselves, so the bot says it "noted" a report. Model is set by `CLAUDE_MODEL` (default the LLM Opus 5.5, low effort; server-side refusal fallback on).
-   - Next: `trainers` and `trainees` tables with lookup by phone (fixed reply for unknown numbers), entry tables, the `save_*` tools, and a CLI command to register a test trainer and trainee until the dashboard exists.
+2. **Submissions** 🚧 in progress – trainee lookup by phone, database, saving the extracted entries, confirmations.
+   - Done (2026-10-29): the LLM (`src/wabot/assistant.py`; OpenAI since 2026-11-01) replies in Polish instead of the echo, using the trainee's last 20 messages from the past 24 h and today's date in Warsaw. Nothing is saved yet besides the messages themselves, so the bot says it "noted" a report. Model is set by `OPENAI_MODEL` (default `gpt-5.6-luna`, low reasoning effort).
+   - Done (2026-11-03): the bot answers only when called by name ("yanek"), returns weight and training as JSON next to the reply, and gets the training plan injected into its prompt – for now one example plan for everyone (`plans/example.txt`, `TRAINING_PLAN_FILE`). The extracted JSON is only logged.
+   - Next: `trainers` and `trainees` tables with lookup by phone (fixed reply for unknown numbers), entry tables and saving the extracted JSON into them, per-trainee plans from the db, and a CLI command to register a test trainer and trainee until the dashboard exists.
 3. **Conversation** – chat history, clarifications, plan questions, corrections.
 4. **Dashboard** – trainer login, trainee registration, plan editing, weight chart, check-in history, last-report view.
 5. **Reminders** – per-trainee schedules, Meta templates, Cloud Scheduler.

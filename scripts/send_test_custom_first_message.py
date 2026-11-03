@@ -49,7 +49,7 @@ def main() -> None:
     else:
         source = f"OpenAI ({settings.openai_model})"
     try:
-        text = conversation.compose_first_message(settings, history, now)
+        text = conversation.compose_first_message(settings, to, history, now)
     except assistant.MissingApiKeyError:
         sys.exit("No OPENAI_API_KEY in .env – set it, or set HARDCODED_FIRST_MESSAGE=True")
     print(f"Message from {source}:\n\n{text}\n")

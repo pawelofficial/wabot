@@ -11,7 +11,7 @@ Planned features:
 - reminders: the bot asks trainees for a quick report on a schedule
 - a dashboard for the trainer with their trainees' data
 
-The full plan, decisions and milestones are in [docs/PLAN.md](docs/PLAN.md).
+The full plan, decisions and milestones are in [docs/PLAN.md](docs/PLAN.md). How the code works, flow by flow, is in [docs/CODE_EXPLANATION.md](docs/CODE_EXPLANATION.md).
 
 ## Status
 
@@ -40,9 +40,11 @@ cp .env.example .env    # then fill in the values
 | `WHATSAPP_PHONE_NUMBER_ID` | API Setup page, next to the test number |
 | `WHATSAPP_TEST_RECIPIENT` | Your own number, digits only (e.g. `48123456789`), added as a recipient on API Setup |
 | `WHATSAPP_APP_SECRET` | App settings → Basic → App secret |
+| `WHATSAPP_APP_ID` | Optional, App settings → Basic → App ID; otherwise looked up via the token |
 | `WHATSAPP_VERIFY_TOKEN` | Any random string you choose; you enter the same value in Meta's webhook settings |
 | `OPENAI_API_KEY` | platform.openai.com → API keys |
-| `OPENAI_MODEL` | Optional, defaults to `gpt-5.4-mini` |
+| `OPENAI_MODEL` | Optional, defaults to `gpt-5.6-luna` |
+| `TRAINING_PLAN_FILE` | Optional, defaults to `plans/example.txt` – the training plan given to the LLM |
 | `HARDCODED_FIRST_MESSAGE` | Optional. `True` makes messages the bot starts come from `src/wabot/utils.py` instead of the LLM – useful without an API key |
 
 `.env` is gitignored; never commit it.
@@ -55,32 +57,28 @@ cp .env.example .env    # then fill in the values
 bash run.sh
 ```
 
-This applies database migrations, sends a test template message to your phone (so you know the token works), and starts the bot on http://localhost:8000.
+This applies database migrations, sends a test template message to your phone (so you know the token works), starts a [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) quick tunnel, points Meta's webhook at it (`scripts/set_webhook.py`, the same as editing the Callback URL in the Meta dashboard) and runs the bot on http://localhost:8000. Ctrl+C stops the bot and the tunnel.
 
-### 4. Expose it to Meta with a tunnel
+- cloudflared is looked up on `PATH`, then at `~/tools/cloudflared.exe`; set `CLOUDFLARED=…` for another location. Its output goes to `.cloudflared.log`.
+- The tunnel URL changes on every start; `run.sh` re-registers it each time, so there's nothing to copy by hand.
+- `PORT=8001 bash run.sh` uses another port; `TUNNEL=0 bash run.sh` skips the tunnel and leaves Meta's webhook as it is.
+- The script finds the app ID through `WHATSAPP_TOKEN`; set `WHATSAPP_APP_ID` (App settings → Basic) to skip that lookup.
 
-Download [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) (a single `.exe` on Windows) and run in a second terminal:
-
-```bash
-cloudflared tunnel --url http://localhost:8000
-```
-
-It prints a URL like `https://something.trycloudflare.com`. The URL changes every time cloudflared restarts.
-
-### 5. Connect Meta's webhook
+### 4. One-time webhook setup in Meta
 
 In the Meta app, open the WhatsApp **Configuration** page (`developers.facebook.com/apps/<APP_ID>/whatsapp-business/wa-settings/`):
 
-1. **Webhook → Edit**: Callback URL `https://something.trycloudflare.com/webhook` (note the `/webhook`), Verify token = `WHATSAPP_VERIFY_TOKEN` from `.env` → *Verify and save*.
-2. **Webhook fields**: subscribe to `messages` (not `message_echoes`).
-3. Once per WhatsApp Business Account, subscribe the app to it – otherwise only Meta's *Test* button reaches the bot, not real messages:
+1. **Webhook fields**: subscribe to `messages` (not `message_echoes`). `run.sh` does this too.
+2. Once per WhatsApp Business Account, subscribe the app to it – otherwise only Meta's *Test* button reaches the bot, not real messages:
 
    ```bash
    curl -X POST -H "Authorization: Bearer $WHATSAPP_TOKEN" \
      https://graph.facebook.com/v25.0/<WABA_ID>/subscribed_apps
    ```
 
-Then send the bot a message from your phone.
+To set the Callback URL by hand instead (e.g. with your own tunnel): **Webhook → Edit**, Callback URL `https://something.trycloudflare.com/webhook` (note the `/webhook`), Verify token = `WHATSAPP_VERIFY_TOKEN` from `.env`, or run `uv run python scripts/set_webhook.py https://something.trycloudflare.com`.
+
+Then send the bot a message from your phone that mentions it by name, e.g. *"yanek, waga 82,4"*. Messages without "yanek" are stored but not answered.
 
 ### Send a message from the bot
 
@@ -104,7 +102,9 @@ uv run ruff check . && uv run ruff format .
 |---|---|
 | `HTTP 401 … code 190` | Access token expired – generate a new one |
 | `HTTP 403 … (#131005) Access denied` | Token was invalidated (regenerated or app settings changed) – generate a new one |
-| "The callback URL or verify token couldn't be validated" | Callback URL missing `/webhook`, tunnel not running, or verify token mismatch – check the uvicorn log |
+| "The callback URL or verify token couldn't be validated" | Callback URL missing `/webhook`, tunnel not running, or verify token mismatch – check the uvicorn log and `.cloudflared.log` |
 | Meta's *Test* button works, real messages don't | App not subscribed to the WhatsApp Business Account (step 5.3) |
 | Bot's message accepted but never arrives; bot logs `131047` | Outside the 24 h window – message the bot first |
+| Bot doesn't answer and logs no `POST /webhook` | Tunnel down or Callback URL outdated – restart `run.sh` |
+| Bot doesn't answer | The message must contain "yanek" (or "yanku", "yanka", …) |
 | Bot doesn't pick up a changed `.env` or `prompts.yaml` | Restart it – both are read at startup (`run.sh` reloads on `prompts.yaml` changes by itself) |

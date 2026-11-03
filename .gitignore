@@ -225,3 +225,4 @@ wabot.db*
 # Scratch files that may contain tokens or IDs
 temp.txt
 screen*.png
+.cloudflared.log

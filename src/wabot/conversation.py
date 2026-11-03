@@ -1,6 +1,8 @@
 """Conversation flow shared by the webhook and the scripts: history, composing and sending."""
 
+import re
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,6 +16,23 @@ HISTORY_WINDOW = timedelta(hours=24)
 HISTORY_LIMIT = 20
 # WhatsApp delivers free-form messages only within 24 h of the trainee's last message.
 SERVICE_WINDOW = timedelta(hours=24)
+# The bot answers only messages that mention it by name, in any Polish case ("yanku", "yanka").
+BOT_NAME = re.compile(r"\byan(?:ek|ka|ku|kiem|kowi)\b", re.IGNORECASE)
+
+
+def mentions_bot(text: str | None) -> bool:
+    return text is not None and BOT_NAME.search(text) is not None
+
+
+def training_plan_for(settings: Settings, phone: str) -> str | None:
+    """The trainee's training plan text, or None if there is none.
+
+    For now every trainee gets TRAINING_PLAN_FILE; once trainees are in the db this looks up
+    the plan their trainer wrote for this phone number.
+    """
+    if not settings.training_plan_file:
+        return None
+    return Path(settings.training_plan_file).read_text(encoding="utf-8")
 
 
 def recent_history(session: Session, phone: str, now: datetime) -> list[Message]:
@@ -41,11 +60,14 @@ def in_service_window(session: Session, phone: str, now: datetime) -> bool:
     return last_inbound is not None
 
 
-def compose_first_message(settings: Settings, history: list[Message], now: datetime) -> str:
+def compose_first_message(
+    settings: Settings, phone: str, history: list[Message], now: datetime
+) -> str:
     """Text for a message the bot starts itself."""
     if settings.hardcoded_first_message:
         return utils.hardcoded_first_message()
-    return assistant.generate_first_message(settings, history, now)
+    plan = training_plan_for(settings, phone)
+    return assistant.generate_first_message(settings, history, now, plan)
 
 
 def send_and_store(settings: Settings, phone: str, text: str) -> str:

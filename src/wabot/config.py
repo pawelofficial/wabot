@@ -19,9 +19,13 @@ class Settings(DatabaseSettings):
     # Any string we choose; entered in Meta's webhook configuration.
     whatsapp_verify_token: str
     graph_api_version: str = "v25.0"
+    # Meta app ID (App settings → Basic); scripts/set_webhook.py looks it up if unset.
+    whatsapp_app_id: str | None = None
 
     openai_api_key: str = ""
-    openai_model: str = "gpt-5.4-mini"
+    openai_model: str = "gpt-5.6-luna"
+    # Training plan injected into the prompt, for every trainee until plans live in the db.
+    training_plan_file: str | None = "plans/example.txt"
     # Use utils.hardcoded_first_message() instead of the LLM for messages the bot starts.
     hardcoded_first_message: bool = False
     # Your own number (digits only); where the scripts send test messages.

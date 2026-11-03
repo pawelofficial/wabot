@@ -13,6 +13,8 @@ from wabot.db import SessionLocal, get_session
 from wabot.models import Message, utcnow
 
 log = logging.getLogger(__name__)
+# uvicorn configures only its own loggers; this makes the app's INFO logs visible too.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s: %(message)s")
 
 app = FastAPI(title="wabot")
 
@@ -73,21 +75,29 @@ APOLOGY = "Przepraszam, mam chwilowy problem. Spróbuj proszę za kilka minut."
 
 
 def reply(msg: whatsapp.InboundMessage) -> None:
+    # Only messages addressed to the bot by name get an answer; the rest is just stored, and
+    # is part of the history the next time the bot is asked.
+    if not conversation.mentions_bot(msg.text):
+        return
     settings = get_settings()
-    if msg.text is None:
-        text = "Na razie obsługuję tylko wiadomości tekstowe."
+    now = utcnow()
+    with SessionLocal() as session:
+        history = conversation.recent_history(session, msg.phone, now)
+    plan = conversation.training_plan_for(settings, msg.phone)
+    try:
+        result = assistant.generate_reply(settings, history, now, plan)
+        text = result.reply
+    except assistant.MissingApiKeyError as e:
+        log.error("Can't reply to %s: %s", msg.wamid, e)
+        text = APOLOGY
+    except Exception:
+        log.exception("LLM call for %s failed", msg.wamid)
+        text = APOLOGY
     else:
-        now = utcnow()
-        with SessionLocal() as session:
-            history = conversation.recent_history(session, msg.phone, now)
-        try:
-            text = assistant.generate_reply(settings, history, now)
-        except assistant.MissingApiKeyError as e:
-            log.error("Can't reply to %s: %s", msg.wamid, e)
-            text = APOLOGY
-        except Exception:
-            log.exception("LLM call for %s failed", msg.wamid)
-            text = APOLOGY
+        # Not saved anywhere yet (milestone 2); logged so it can be checked.
+        for kind, data in (("weight", result.weight), ("training", result.training)):
+            if data is not None:
+                log.info("Extracted %s from %s: %s", kind, msg.wamid, data.model_dump_json())
     try:
         conversation.send_and_store(settings, msg.phone, text)
     except httpx.HTTPStatusError as e:

@@ -1,0 +1,104 @@
+# Exercise catalog: fixed IDs the LLM maps every reported and planned exercise to, so the same
+# exercise is stored under one ID however the trainee or trainer names it. IDs are permanent
+# once data uses them – add new entries instead of renaming. `aliases` are other names people
+# use; the LLM also matches obvious variants. Loaded once at startup by wabot/exercises.py.
+
+- id: back_squat
+  name: Przysiad ze sztangą
+  aliases: [przysiad, przysiady, squat, back squat]
+  group: nogi
+
+- id: leg_press
+  name: Suwnica na nogi
+  aliases: [suwnica, wypychanie nóg, leg press]
+  group: nogi
+
+- id: walking_lunge
+  name: Wykroki chodzone
+  aliases: [wykroki, wypady, wypady chodzone, lunges]
+  group: nogi
+
+- id: bulgarian_split_squat
+  name: Przysiad bułgarski
+  aliases: [bułgary, bułgarskie przysiady, bulgarian split squat]
+  group: nogi
+
+- id: romanian_deadlift
+  name: Martwy ciąg rumuński
+  aliases: [rumuński martwy ciąg, rdl, martwy na prostych nogach]
+  group: nogi
+
+- id: deadlift
+  name: Martwy ciąg klasyczny
+  aliases: [martwy ciąg, martwy, deadlift]
+  group: plecy
+
+- id: hip_thrust
+  name: Hip thrust
+  aliases: [hip thrusty, wypychanie bioder]
+  group: pośladki
+
+- id: glute_bridge
+  name: Mostek biodrowy
+  aliases: [mostki, mostek, mostek na jednej nodze, glute bridge]
+  group: pośladki
+
+- id: bench_press
+  name: Wyciskanie sztangi leżąc
+  aliases: [wyciskanie leżąc, klata, bench press, ławka płaska]
+  group: klatka
+
+- id: incline_dumbbell_press
+  name: Wyciskanie hantli na ławce skośnej
+  aliases: [wyciskanie na skosie, skos, skośna z hantlami]
+  group: klatka
+
+- id: push_up
+  name: Pompki
+  aliases: [pompka, push up]
+  group: klatka
+
+- id: seated_dumbbell_press
+  name: Wyciskanie hantli nad głowę siedząc
+  aliases: [wyciskanie nad głowę, wyciskanie żołnierskie, ohp, barki z hantlami]
+  group: barki
+
+- id: face_pull
+  name: Face pull
+  aliases: [face pulle, przyciąganie liny do twarzy]
+  group: barki
+
+- id: barbell_row
+  name: Wiosłowanie sztangą w opadzie
+  aliases: [wiosło, wiosłowanie, wiosłowanie sztangą, barbell row]
+  group: plecy
+
+- id: lat_pulldown
+  name: Ściąganie drążka wyciągu do klatki
+  aliases: [ściąganie drążka, wyciąg górny, ściąganie wyciągu, lat pulldown]
+  group: plecy
+
+- id: pull_up
+  name: Podciąganie na drążku
+  aliases: [podciąganie, podciąganie z gumą, pull up]
+  group: plecy
+
+- id: plank
+  name: Plank
+  aliases: [deska, planka]
+  group: brzuch
+
+- id: farmers_walk
+  name: Spacer farmera
+  aliases: [farmer walk, farmer's walk, spacer z hantlami]
+  group: całe ciało
+
+- id: running
+  name: Bieganie
+  aliases: [bieg, bieganie, jogging, bieżnia]
+  group: cardio
+
+- id: cycling
+  name: Rower
+  aliases: [jazda na rowerze, rowerek, rower stacjonarny]
+  group: cardio
