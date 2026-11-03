@@ -2,7 +2,8 @@
 
 Does the same as WhatsApp → Configuration → Webhook → Edit in the Meta app dashboard: sets the
 Callback URL to <url>/webhook with WHATSAPP_VERIFY_TOKEN and subscribes the `messages` field.
-Meta checks the URL right away, so the bot must be running and reachable through the URL.
+Meta checks the URL right away (GET /webhook), so the bot must be running and reachable through
+the URL; until it is, the registration is retried.
 
 Run from the project root (run.sh does this by itself after starting the tunnel):
     uv run python scripts/set_webhook.py https://something.trycloudflare.com
@@ -16,20 +17,11 @@ import httpx
 
 from wabot.config import get_settings
 
-# A new trycloudflare.com address takes a few seconds to become reachable.
-WAIT_FOR_TUNNEL = 60
-
-
-def wait_until_reachable(url: str) -> bool:
-    deadline = time.monotonic() + WAIT_FOR_TUNNEL
-    while time.monotonic() < deadline:
-        try:
-            if httpx.get(url, timeout=5).status_code == 200:
-                return True
-        except httpx.HTTPError:
-            pass
-        time.sleep(2)
-    return False
+# A new trycloudflare.com address takes a few seconds to become reachable. Checking it from this
+# machine isn't reliable (a VPN's DNS may not resolve it yet while Meta already can), so Meta's own
+# check is the test: registering is retried until Meta reaches the bot.
+WAIT_FOR_TUNNEL = 120
+RETRY_EVERY = 5
 
 
 def main() -> None:
@@ -52,24 +44,30 @@ def main() -> None:
             )
         app_id = response.json()["id"]
 
-    if not wait_until_reachable(base):
-        sys.exit(f"{base} isn't reachable – is the bot running and the tunnel up?")
-
-    response = httpx.post(
-        f"{graph}/{app_id}/subscriptions",
-        data={
-            "object": "whatsapp_business_account",
-            "callback_url": f"{base}/webhook",
-            "verify_token": settings.whatsapp_verify_token,
-            "fields": "messages",
-            # App access token: app ID and app secret.
-            "access_token": f"{app_id}|{settings.whatsapp_app_secret}",
-        },
-        timeout=30,
-    )
-    if response.is_error:
-        sys.exit(f"Setting the webhook failed: HTTP {response.status_code}: {response.text}")
-    print(f"Webhook set: {base}/webhook")
+    deadline = time.monotonic() + WAIT_FOR_TUNNEL
+    while True:
+        try:
+            response = httpx.post(
+                f"{graph}/{app_id}/subscriptions",
+                data={
+                    "object": "whatsapp_business_account",
+                    "callback_url": f"{base}/webhook",
+                    "verify_token": settings.whatsapp_verify_token,
+                    "fields": "messages",
+                    # App access token: app ID and app secret.
+                    "access_token": f"{app_id}|{settings.whatsapp_app_secret}",
+                },
+                timeout=30,
+            )
+            error = f"HTTP {response.status_code}: {response.text}" if response.is_error else None
+        except httpx.HTTPError as e:
+            error = str(e)
+        if error is None:
+            print(f"Webhook set: {base}/webhook")
+            return
+        if time.monotonic() > deadline:
+            sys.exit(f"Setting the webhook failed (is the bot running and the tunnel up?): {error}")
+        time.sleep(RETRY_EVERY)
 
 
 if __name__ == "__main__":

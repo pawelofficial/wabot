@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Milestone 0 (developer setup) is done and so is milestone 1 (echo bot); development is local until the production milestone. Settings and secrets (Meta access token, app secret, webhook verify token) are in `.env` (gitignored; never print or commit it).
+Milestone 0 (developer setup) is done and so is milestone 1 (echo bot); milestone 2 (submissions) is in progress – trainees, plans, weight and training are in the database, diet isn't yet. Development is local until the production milestone. Settings and secrets (Meta access token, app secret, webhook verify token) are in `.env` (gitignored; never print or commit it).
 
 ## Commands
 
@@ -18,23 +18,27 @@ uv run python scripts/set_webhook.py <url>   # point Meta's webhook at <url>/web
 uv run uvicorn wabot.main:app --reload   # run the bot without migrating
 uv run pytest                            # tests (single: uv run pytest tests/test_webhook.py::test_name)
 uv run ruff check . && uv run ruff format .
+uv run python scripts/add_trainee.py     # register WHATSAPP_TEST_RECIPIENT as a trainee (--help for options)
 uv run python scripts/send_test.py       # send a test template message
 uv run python scripts/send_test_custom_first_message.py [--dry-run]   # bot-started message, composed by the app
 ```
 
 ## Code layout
 
-- `src/wabot/main.py` – FastAPI app: `GET /webhook` (Meta's verification), `POST /webhook` (signature check, store message, dedup by unique `wamid`, reply in a background task)
-- `src/wabot/conversation.py` – flow shared by the webhook and scripts: the "yanek" name trigger, chat history, training plan lookup, 24 h window check, composing bot-started messages, send-and-store
+- `src/wabot/main.py` – FastAPI app: `GET /webhook` (Meta's verification), `POST /webhook` (signature check, trainee lookup by phone, store message, dedup by unique `wamid`, reply in a background task; fixed reply for unregistered numbers), `reply()` (LLM, save, send)
+- `src/wabot/conversation.py` – flow shared by the webhook and scripts: the "yanek" name trigger, the trainee's chat history, `asked_again()` (skip a message the trainee followed up on), 24 h window check, composing bot-started messages, send-and-store
+- `src/wabot/trainees.py` – `find_by_phone()`, `normalize_phone()`, `trainer_named()`
+- `src/wabot/entries.py` – `save()`: the extracted weight and training into `weight_entries` / `training_checkins`; one per trainee per day, a newer report replaces it
 - `src/wabot/utils.py` – `hardcoded_first_message()`, used instead of the LLM when `HARDCODED_FIRST_MESSAGE=True`
 - `src/wabot/whatsapp.py` – Cloud API: signature check, webhook parsing (incl. failed delivery statuses), sending
-- `src/wabot/models.py` – SQLAlchemy models; use `UTCDateTime` for every timestamp
+- `src/wabot/models.py` – SQLAlchemy models (`Trainer`, `Trainee`, `Message`, `WeightEntry`, `TrainingCheckin`, `TrainingExercise`); use `UTCDateTime` for every timestamp
 - `src/wabot/db.py` – engine and sessions (SQLite runs with WAL and a busy timeout)
-- `src/wabot/assistant.py` – LLM calls (OpenAI Responses API, `OPENAI_MODEL`): `generate_reply()` returns an `LlmOutput` (reply text + extracted `weight` / `training`), `generate_first_message()`; `build_instructions()` injects the training plan; output that fails validation is retried once with the errors
+- `src/wabot/assistant.py` – LLM calls (OpenAI Responses API, `OPENAI_MODEL`): `generate_reply(settings, trainee, history, now)` returns an `LlmOutput` (reply text + extracted `weight` / `training`), `generate_first_message()`; `build_instructions()` injects the trainee's training plan; dates are in the trainee's timezone; output that fails validation is retried once with the errors
 - `src/wabot/prompts.yaml` – the LLM prompts: `system`, `training_plan` (`{training_plan}` is replaced with the plan text), `no_training_plan`, `new_messages_marker` (inserted after the bot's last message, `HISTORY_MODE`), `first_message_task`; loaded at startup. Keep the field rules in sync with `llm_output.py`
 - `src/wabot/llm_output.py` – pydantic models of the LLM output (the JSON schema sent to OpenAI is generated from them) and `validate_output()`: structure, plausible values, dates, names that must be in the plan
 - `src/wabot/exercises.yaml` + `exercises.py` – exercise catalog (fixed IDs, Polish names, aliases, muscle group); injected into the prompt, and its IDs are the allowed values of `exercise_id` in the schema. IDs are permanent once data uses them – add, don't rename
-- `plans/example.txt` – example training plan (free text, as a trainer writes it), injected for every trainee until plans are in the db
+- `plans/example.txt` – example training plan (free text, as a trainer writes it); `scripts/add_trainee.py` gives it to new trainees
+- `scripts/add_trainee.py` – registers or updates a trainee and their trainer until the dashboard exists
 - `alembic/` – migrations; `UTCDateTime` is rendered as plain `DateTime(timezone=True)`
 
 `docs/CODE_EXPLANATION.md` walks through the runtime flows (which function calls which, where data ends up). When a change adds, removes or reorders a step in one of those flows, update it in the same change.

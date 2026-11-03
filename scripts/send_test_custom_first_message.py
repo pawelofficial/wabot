@@ -18,7 +18,7 @@ import sys
 
 import httpx
 
-from wabot import assistant, conversation
+from wabot import assistant, conversation, trainees
 from wabot.config import get_settings
 from wabot.db import SessionLocal
 from wabot.models import utcnow
@@ -41,7 +41,10 @@ def main() -> None:
 
     now = utcnow()
     with SessionLocal() as session:
-        history = conversation.recent_history(session, to, now)
+        trainee = trainees.find_by_phone(session, to)
+        if trainee is None:
+            sys.exit(f"{to} isn't a registered trainee – run scripts/add_trainee.py first")
+        history = conversation.recent_history(session, trainee.id, now)
         in_window = conversation.in_service_window(session, to, now)
 
     if settings.hardcoded_first_message:
@@ -49,7 +52,7 @@ def main() -> None:
     else:
         source = f"OpenAI ({settings.openai_model})"
     try:
-        text = conversation.compose_first_message(settings, to, history, now)
+        text = conversation.compose_first_message(settings, trainee, history, now)
     except assistant.MissingApiKeyError:
         sys.exit("No OPENAI_API_KEY in .env – set it, or set HARDCODED_FIRST_MESSAGE=True")
     print(f"Message from {source}:\n\n{text}\n")
@@ -64,7 +67,7 @@ def main() -> None:
         )
 
     try:
-        wamid = conversation.send_and_store(settings, to, text)
+        wamid = conversation.send_and_store(settings, trainee, text)
     except httpx.HTTPStatusError as e:
         sys.exit(f"Sending failed: HTTP {e.response.status_code}: {e.response.text}")
     print(f"Sent to {to}: {wamid}")

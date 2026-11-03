@@ -17,7 +17,7 @@ The full plan, decisions and milestones are in [docs/PLAN.md](docs/PLAN.md). How
 
 - ✅ Milestone 0 – Meta developer app with the free test number
 - ✅ Milestone 1 – webhook, signature check, dedup, replies
-- 🚧 Milestone 2 – LLM replies in Polish from the recent chat history; saving reports to the database is next
+- 🚧 Milestone 2 – LLM replies in Polish; trainees, their plans and their weight and training reports are in the database; diet reports are next
 
 ## Stack
 
@@ -44,7 +44,6 @@ cp .env.example .env    # then fill in the values
 | `WHATSAPP_VERIFY_TOKEN` | Any random string you choose; you enter the same value in Meta's webhook settings |
 | `OPENAI_API_KEY` | platform.openai.com → API keys |
 | `OPENAI_MODEL` | Optional, defaults to `gpt-5.6-luna` |
-| `TRAINING_PLAN_FILE` | Optional, defaults to `plans/example.txt` – the training plan given to the LLM |
 | `HISTORY_MODE` | Optional. `marked` (default): the LLM gets the recent chat with a marker where the new report starts. `new_only`: the code sends only the messages since the bot's last one |
 | `HARDCODED_FIRST_MESSAGE` | Optional. `True` makes messages the bot starts come from `src/wabot/utils.py` instead of the LLM – useful without an API key |
 
@@ -52,7 +51,16 @@ cp .env.example .env    # then fill in the values
 
 **Permanent token (optional):** business.facebook.com → Settings → Users → System users → Add (Admin) → assign your app and WhatsApp account → Generate token, expiration *Never*, permissions `whatsapp_business_messaging` and `whatsapp_business_management`.
 
-### 3. Run the bot
+### 3. Register yourself as a trainee
+
+```bash
+uv run alembic upgrade head
+uv run python scripts/add_trainee.py
+```
+
+The bot answers only registered numbers; anyone else gets "Ten numer nie jest zarejestrowany – skontaktuj się ze swoim trenerem". With no options the script registers `WHATSAPP_TEST_RECIPIENT` with a test trainer and the example plan (`plans/example.txt`). Run it again to change something, e.g. `--plan my_plan.txt`, `--no-plan`, `--name "Ania"`; `--phone 48123456789` adds another number. Until the dashboard exists, this is how trainees and plans get into the database.
+
+### 4. Run the bot
 
 ```bash
 bash run.sh
@@ -65,7 +73,7 @@ This applies database migrations, sends a test template message to your phone (s
 - `PORT=8001 bash run.sh` uses another port; `TUNNEL=0 bash run.sh` skips the tunnel and leaves Meta's webhook as it is.
 - The script finds the app ID through `WHATSAPP_TOKEN`; set `WHATSAPP_APP_ID` (App settings → Basic) to skip that lookup.
 
-### 4. One-time webhook setup in Meta
+### 5. One-time webhook setup in Meta
 
 In the Meta app, open the WhatsApp **Configuration** page (`developers.facebook.com/apps/<APP_ID>/whatsapp-business/wa-settings/`):
 
@@ -104,8 +112,9 @@ uv run ruff check . && uv run ruff format .
 | `HTTP 401 … code 190` | Access token expired – generate a new one |
 | `HTTP 403 … (#131005) Access denied` | Token was invalidated (regenerated or app settings changed) – generate a new one |
 | "The callback URL or verify token couldn't be validated" | Callback URL missing `/webhook`, tunnel not running, or verify token mismatch – check the uvicorn log and `.cloudflared.log` |
-| Meta's *Test* button works, real messages don't | App not subscribed to the WhatsApp Business Account (step 5.3) |
+| Meta's *Test* button works, real messages don't | App not subscribed to the WhatsApp Business Account (step 5.2) |
 | Bot's message accepted but never arrives; bot logs `131047` | Outside the 24 h window – message the bot first |
 | Bot doesn't answer and logs no `POST /webhook` | Tunnel down or Callback URL outdated – restart `run.sh` |
 | Bot doesn't answer | The message must contain "yanek" (or "yanku", "yanka", …) |
+| Bot answers "Ten numer nie jest zarejestrowany" | Your number isn't a trainee yet – run `uv run python scripts/add_trainee.py` |
 | Bot doesn't pick up a changed `.env` or `prompts.yaml` | Restart it – both are read at startup (`run.sh` reloads on `prompts.yaml` changes by itself) |

@@ -2,7 +2,7 @@
 weight and training data it reports."""
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -12,7 +12,7 @@ import yaml
 from wabot import exercises, llm_output
 from wabot.config import Settings
 from wabot.llm_output import LlmOutput
-from wabot.models import Message
+from wabot.models import Message, Trainee
 
 log = logging.getLogger(__name__)
 
@@ -58,8 +58,12 @@ class MissingApiKeyError(Exception):
     pass
 
 
-def _today(settings: Settings, now: datetime) -> str:
-    local = now.astimezone(ZoneInfo(settings.default_timezone))
+def _local(trainee: Trainee, now: datetime) -> datetime:
+    return now.astimezone(ZoneInfo(trainee.timezone))
+
+
+def _today(trainee: Trainee, now: datetime) -> str:
+    local = _local(trainee, now)
     return f"Dzisiaj jest {WEEKDAYS_PL[local.weekday()]}, {local:%Y-%m-%d}, godz. {local:%H:%M}."
 
 
@@ -88,14 +92,14 @@ def _complete(
     settings: Settings,
     instructions: str,
     messages: list[dict],
-    now: datetime,
+    today: date,
     training_plan: str | None,
 ) -> LlmOutput:
+    """Call the model; today (the trainee's local date) and the plan are for validation."""
     if not settings.openai_api_key:
         raise MissingApiKeyError("OPENAI_API_KEY is not set in .env")
 
     client = openai.OpenAI(api_key=settings.openai_api_key)
-    today = now.astimezone(ZoneInfo(settings.default_timezone)).date()
     messages = list(messages)
     for attempt in range(1, ATTEMPTS + 1):
         response = client.responses.create(
@@ -144,36 +148,36 @@ def _complete(
 
 
 def generate_reply(
-    settings: Settings, history: list[Message], now: datetime, training_plan: str | None
+    settings: Settings, trainee: Trainee, history: list[Message], now: datetime
 ) -> LlmOutput:
     """Reply to the trainee's latest message (the last entry of history) and extract the
-    weight and training it reports."""
+    weight and training it reports. The trainee's plan goes into the prompt."""
     return _complete(
         settings,
-        build_instructions(training_plan),
+        build_instructions(trainee.training_plan),
         [
             *reply_input(settings, history),
             # Per-request context goes after the history so the prefix stays cacheable.
-            {"role": "developer", "content": _today(settings, now)},
+            {"role": "developer", "content": _today(trainee, now)},
         ],
-        now,
-        training_plan,
+        _local(trainee, now).date(),
+        trainee.training_plan,
     )
 
 
 def generate_first_message(
-    settings: Settings, history: list[Message], now: datetime, training_plan: str | None
+    settings: Settings, trainee: Trainee, history: list[Message], now: datetime
 ) -> str:
     """A message the bot sends on its own, e.g. to ask for a report."""
     output = _complete(
         settings,
-        build_instructions(training_plan, PROMPTS["first_message_task"]),
+        build_instructions(trainee.training_plan, PROMPTS["first_message_task"]),
         [
             *to_llm_messages(history),
             # The API needs the conversation to end with a user turn.
-            {"role": "user", "content": f"[automatyczny wyzwalacz] {_today(settings, now)}"},
+            {"role": "user", "content": f"[automatyczny wyzwalacz] {_today(trainee, now)}"},
         ],
-        now,
-        training_plan,
+        _local(trainee, now).date(),
+        trainee.training_plan,
     )
     return output.reply

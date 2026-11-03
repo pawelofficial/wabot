@@ -19,7 +19,7 @@ A WhatsApp assistant for personal trainers. Trainees report weight, training and
 
 ## Trainee onboarding
 
-Because consent is collected on paper, **the trainer registers each trainee in the dashboard** (name, phone number, consent-on-file date). There are no self-service join codes. A message from an unregistered number gets a fixed Polish reply ("Ten numer nie jest zarejestrowany – skontaktuj się ze swoim trenerem") and nothing is stored beyond what deduplication needs.
+Because consent is collected on paper, **the trainer registers each trainee in the dashboard** (name, phone number, consent-on-file date). There are no self-service join codes. A message from an unregistered number gets a fixed Polish reply ("Ten numer nie jest zarejestrowany – skontaktuj się ze swoim trenerem") to every message, and nothing is stored beyond what deduplication needs: the message ID, number and type, not the text. Until the dashboard exists, `scripts/add_trainee.py` registers trainees and their trainer (decided 2026-11-03).
 
 ## What the bot handles
 
@@ -50,9 +50,11 @@ One LLM call per such message, with:
 - **Instructions** – the static system prompt from `src/wabot/prompts.yaml`, followed by the **trainee's training plan injected** into it (free text written by the trainer). Static part first, so the shared prefix stays cacheable.
 - **Recent history** – the trainee's last messages within a short window (e.g. 24 h, capped at N messages), including the bot's replies and reminders, so clarifications and replies to reminders work. A "--- NOWE WIADOMOŚCI ---" marker after the bot's last message shows where the new report starts; data is extracted only below it. `HISTORY_MODE=new_only` makes the code drop everything above the marker instead, in case the LLM re-extracts old reports (decided 2026-11-03; less context, so corrections and answers to the bot's questions lose what they refer to).
 - **The trainee's local date** after the history, so "wczoraj" / "w poniedziałek" resolve correctly.
-- **Structured output** (decided 2026-11-03, replacing the write tools for now) – a JSON schema with `reply` (the Polish WhatsApp text), `weight` (`kg`, `date`) and `training` (`date`, `plan_day` as named in the plan, `status` done/partial/skipped, `exercises` with a catalog `exercise_id`, sets/reps/weight, `replaces` (the plan exercise a substitute was done instead of) and a free-text `comment`, `missed_exercises`, `notes`), each null when not reported. The app saves what it gets; only data from messages since the bot's last reply is extracted.
+- **Structured output** (decided 2026-11-03, replacing the write tools for now) – a JSON schema with `reply` (the Polish WhatsApp text), `weight` (`kg`, `date`) and `training` (`date`, `plan_day` as named in the plan, `status` done/partial/skipped, `exercises` with a catalog `exercise_id`, sets/reps/weight, `replaces` (the plan exercise a substitute was done instead of) and a free-text `comment`, `missed_exercises`, `notes`), each null when not reported. The app saves what it gets and only then sends the reply (a failed save sends the apology instead); only data from messages since the bot's last reply is extracted.
+- **One weight and one training per trainee per day** (decided 2026-11-03). A report for a day that already has one replaces it, which is how corrections work: "yanek 80 kg", then "yanek sorki, 81" saves 81. For a correction or addition to a training ("przysiad był na 65 kg", "dorzuć plank") the LLM returns the whole session again, copying the rest from the earlier report in the history. That only works while the earlier report is in the history it gets (24 h / 20 messages, and not with `HISTORY_MODE=new_only`); otherwise the day is replaced by just the corrected part. Showing the LLM the saved entries of the last days fixes that (milestone 3).
+- **Messages sent close together** (decided 2026-11-03): when the trainee calls the bot again before the first reply is out ("yanek 80", "yanek sorki, 81"), only the later message is answered. Its history has both, since both come after the bot's last message. An older report also never overwrites an entry saved from a newer message.
 - **Exercise catalog** (decided 2026-11-03) – `src/wabot/exercises.yaml` gives every exercise a fixed ID (e.g. `leg_press` for "suwnica", "wypychanie nóg", "leg press"), so progress can be charted per exercise however it's named and across plan changes. The model maps reported and planned exercises to it; the schema only allows catalog IDs, and an exercise outside the catalog gets `null` plus the trainee's name. Starts with 20 exercises maintained in the repo; trainers adding their own is a dashboard feature (milestone 4).
-- Read tools (`get_diet_plan`, `get_trainer_notes`, `get_recent_entries`) and corrections of earlier entries are still open; the training plan is injected rather than fetched by a tool.
+- Read tools (`get_diet_plan`, `get_trainer_notes`, `get_recent_entries`) are still open; the training plan is injected rather than fetched by a tool.
 
 The trainee identity is resolved server-side from the sender's phone number and bound to the request (plan lookup, saving); the model never supplies a trainee ID, so one trainee can't reach another's data. The LLM writes the reply text (in Polish).
 
@@ -90,7 +92,7 @@ The trainee identity is resolved server-side from the sender's phone number and 
 
 ### Core data model
 
-`trainers` → `trainees` (phone, name, timezone, consent_on_file_at, training_plan, diet_plan, notes) → `weight_entries`, `training_checkins`, `diet_checkins`, `photos`, `reminder_schedules`, `messages` (inbound and outbound, used as chat history and for dedup). Every trainee-owned row also carries `trainer_id`.
+`trainers` → `trainees` (phone, name, timezone, consent_date, training_plan; diet_plan and notes later) → `weight_entries` (date, kg), `training_checkins` (date, plan_day, status, missed_exercises, notes) with `training_exercises`, later `diet_checkins`, `photos`, `reminder_schedules`; and `messages` (inbound and outbound, used as chat history and for dedup). Every trainee-owned row also carries `trainer_id`; exercise rows are reached only through their check-in, which carries it. Each entry keeps `message_id`, the trainee's message the bot answered when saving it, so the dashboard can show the original next to the entry. Built so far (2026-11-03): trainers, trainees, messages, weight_entries, training_checkins, training_exercises.
 
 ## Out of scope for now
 
@@ -105,7 +107,7 @@ The goal is the smallest version that a trainer can use with real trainees. Wher
 
 - **Trainer accounts** are created by hand by the operator (a small CLI command plus a Firebase Auth user). No sign-up page.
 - **Chat history** sent to the LLM is the trainee's last 20 messages from the past 24 h.
-- **Corrections** apply to the trainee's latest entry of that type only.
+- **Corrections:** one weight and one training per day; a newer report for the day replaces the older one (see "The LLM's role").
 - **Missed reports:** the dashboard shows the date of each trainee's last weight, training and diet report, and highlights any older than a few days. There are no rules tied to the reminder schedule.
 - **Reminders:** a simple per-trainee schedule (days of the week plus a time) for each report type, with one Meta template per type.
 - **Not in the MVP:** photos, notifying trainees about plan changes, and data-retention and export tooling (data is deleted by hand on request).
@@ -131,9 +133,10 @@ Milestones 1–5 are developed and run **locally** (`bash run.sh` migrates the d
 1. **Echo bot** ✅ done (2026-10-29) – webhook verification, signature check, dedup, reply; tested locally via tunnel.
 2. **Submissions** 🚧 in progress – trainee lookup by phone, database, saving the extracted entries, confirmations.
    - Done (2026-10-29): the LLM (`src/wabot/assistant.py`; OpenAI since 2026-11-01) replies in Polish instead of the echo, using the trainee's last 20 messages from the past 24 h and today's date in Warsaw. Nothing is saved yet besides the messages themselves, so the bot says it "noted" a report. Model is set by `OPENAI_MODEL` (default `gpt-5.6-luna`, low reasoning effort).
-   - Done (2026-11-03): the bot answers only when called by name ("yanek"), returns weight and training as JSON next to the reply, and gets the training plan injected into its prompt – for now one example plan for everyone (`plans/example.txt`, `TRAINING_PLAN_FILE`). The extracted JSON is only logged.
-   - Next: `trainers` and `trainees` tables with lookup by phone (fixed reply for unknown numbers), entry tables and saving the extracted JSON into them, per-trainee plans from the db, and a CLI command to register a test trainer and trainee until the dashboard exists.
-3. **Conversation** – chat history, clarifications, plan questions, corrections.
+   - Done (2026-11-03): the bot answers only when called by name ("yanek"), returns weight and training as JSON next to the reply, and gets the training plan injected into its prompt.
+   - Done (2026-11-03): `trainers` and `trainees` tables, the trainee looked up by phone (fixed reply for unknown numbers), each trainee's own plan and timezone from the db, `weight_entries` and `training_checkins` / `training_exercises` filled from the extracted JSON (one per day, newer replaces older), messages linked to their trainee, and `scripts/add_trainee.py` to register a test trainer and trainee.
+   - Not done yet: diet reports, which the bot only acknowledges.
+3. **Conversation** – chat history, clarifications, plan questions, corrections. Corrections need the LLM to see the trainee's saved entries of the last days (injected, or a `get_recent_entries` tool), so a correction of an older training doesn't replace the day with just the corrected part.
 4. **Dashboard** – trainer login, trainee registration, plan editing, weight chart, check-in history, last-report view.
 5. **Reminders** – per-trainee schedules, Meta templates, Cloud Scheduler.
 6. **Go-live accounts** – start around milestone 4, since Meta's steps can take days to weeks.

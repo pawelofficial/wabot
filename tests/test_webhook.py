@@ -1,3 +1,4 @@
+import datetime as dt
 import hashlib
 import hmac
 import json
@@ -5,13 +6,36 @@ import json
 import pytest
 from sqlalchemy import select
 
-from wabot import assistant, whatsapp
+from wabot import assistant, entries, main, trainees, whatsapp
 from wabot.db import SessionLocal
-from wabot.llm_output import LlmOutput
-from wabot.models import Message
+from wabot.llm_output import LlmOutput, Weight
+from wabot.models import Message, Trainee, WeightEntry, utcnow
+
+PHONE = "48111222333"
+PLAN = "Dzień A – przysiad ze sztangą 4 x 6"
 
 
-def text_payload(wamid: str, text: str, phone: str = "48111222333") -> dict:
+def add_trainee(phone: str = PHONE, plan: str | None = PLAN, trainer: str = "Trener") -> Trainee:
+    with SessionLocal() as session:
+        trainee = Trainee(
+            trainer=trainees.trainer_named(session, trainer),
+            phone=phone,
+            name="Ania",
+            consent_date=dt.date(2026, 11, 1),
+            training_plan=plan,
+        )
+        session.add(trainee)
+        session.commit()
+        return trainee
+
+
+@pytest.fixture
+def trainee() -> Trainee:
+    """A registered trainee with the number the payloads come from."""
+    return add_trainee()
+
+
+def text_payload(wamid: str, text: str, phone: str = PHONE) -> dict:
     return {
         "object": "whatsapp_business_account",
         "entry": [
@@ -66,7 +90,7 @@ def llm(monkeypatch) -> list[list[Message]]:
     """Replace the LLM with a stub; records the history it was given."""
     histories = []
 
-    def fake_generate_reply(settings, history, now, training_plan):
+    def fake_generate_reply(settings, trainee, history, now):
         histories.append(history)
         return LlmOutput(reply=f"Odpowiedź {len(histories)}", weight=None, training=None)
 
@@ -74,9 +98,29 @@ def llm(monkeypatch) -> list[list[Message]]:
     return histories
 
 
+@pytest.fixture
+def llm_returns(monkeypatch):
+    """Replace the LLM with a stub that returns the given outputs, one per call."""
+
+    def install(*outputs: LlmOutput):
+        queue = list(outputs)
+        monkeypatch.setattr(assistant, "generate_reply", lambda *args: queue.pop(0))
+
+    return install
+
+
 def stored_messages() -> list[Message]:
     with SessionLocal() as session:
         return list(session.scalars(select(Message).order_by(Message.id)))
+
+
+def stored_weights() -> list[WeightEntry]:
+    with SessionLocal() as session:
+        return list(session.scalars(select(WeightEntry).order_by(WeightEntry.id)))
+
+
+def weight_output(kg: float, reply: str = "Zapisałem.") -> LlmOutput:
+    return LlmOutput(reply=reply, weight=Weight(kg=kg, date=utcnow().date()), training=None)
 
 
 def test_verify_webhook(client):
@@ -98,7 +142,7 @@ def test_rejects_bad_signature(client, sent):
     assert sent == []
 
 
-def test_replies_with_the_llm_and_stores_both_messages(client, sent, llm):
+def test_replies_with_the_llm_and_stores_both_messages(client, sent, llm, trainee):
     response = post_signed(client, text_payload("wamid.1", "yanek 82,4 rano"))
     assert response.status_code == 200
     assert sent == [("48111222333", "Odpowiedź 1")]
@@ -107,9 +151,11 @@ def test_replies_with_the_llm_and_stores_both_messages(client, sent, llm):
     assert (inbound.direction, inbound.wamid, inbound.body) == ("in", "wamid.1", "yanek 82,4 rano")
     assert (outbound.direction, outbound.wamid) == ("out", "wamid.out1")
     assert inbound.created_at.tzinfo is not None
+    for msg in (inbound, outbound):
+        assert (msg.trainee_id, msg.trainer_id) == (trainee.id, trainee.trainer_id)
 
 
-def test_duplicate_delivery_is_ignored(client, sent, llm):
+def test_duplicate_delivery_is_ignored(client, sent, llm, trainee):
     post_signed(client, text_payload("wamid.1", "hej yanek"))
     post_signed(client, text_payload("wamid.1", "hej yanek"))
     assert len(sent) == 1
@@ -125,7 +171,8 @@ def test_status_updates_are_ignored(client, sent):
     assert sent == []
 
 
-def test_history_includes_previous_turns_of_the_same_trainee(client, sent, llm):
+def test_history_includes_previous_turns_of_the_same_trainee(client, sent, llm, trainee):
+    add_trainee(phone="48999888777")
     post_signed(client, text_payload("wamid.1", "yanek 82"))
     post_signed(client, text_payload("wamid.other", "hej yanek", phone="48999888777"))
     post_signed(client, text_payload("wamid.2", "kg"))
@@ -140,7 +187,7 @@ def test_history_includes_previous_turns_of_the_same_trainee(client, sent, llm):
     ]
 
 
-def test_messages_without_the_bot_name_are_stored_but_not_answered(client, sent, llm):
+def test_messages_without_the_bot_name_are_stored_but_not_answered(client, sent, llm, trainee):
     post_signed(client, text_payload("wamid.1", "82,4 rano"))
     assert llm == []
     assert sent == []
@@ -159,3 +206,80 @@ def test_llm_turns_start_with_the_trainee():
         {"role": "assistant", "content": "Cześć!"},
         {"role": "user", "content": "[wiadomość typu image]"},
     ]
+
+
+def test_unregistered_number_gets_a_fixed_reply_and_its_text_is_not_kept(client, sent, llm):
+    post_signed(client, text_payload("wamid.1", "yanek, waga 82"))
+    post_signed(client, text_payload("wamid.1", "yanek, waga 82"))  # redelivered
+
+    assert sent == [(PHONE, main.UNREGISTERED)]
+    assert llm == []
+    [stored] = stored_messages()
+    assert (stored.wamid, stored.body, stored.trainee_id) == ("wamid.1", None, None)
+
+
+def test_the_trainees_own_plan_goes_to_the_llm(client, sent, monkeypatch):
+    add_trainee(plan="Plan Ani")
+    add_trainee(phone="48999888777", plan="Plan Basi")
+    plans = []
+
+    def fake_generate_reply(settings, trainee, history, now):
+        plans.append(trainee.training_plan)
+        return LlmOutput(reply="Ok.", weight=None, training=None)
+
+    monkeypatch.setattr(assistant, "generate_reply", fake_generate_reply)
+    post_signed(client, text_payload("wamid.1", "yanek, co mam dziś?", phone="48999888777"))
+    assert plans == ["Plan Basi"]
+
+
+def test_reported_weight_is_saved(client, sent, trainee, llm_returns):
+    llm_returns(weight_output(80.0, reply="Zapisałem 80 kg."))
+    post_signed(client, text_payload("wamid.1", "yanek waga 80"))
+
+    [entry] = stored_weights()
+    [inbound, _] = stored_messages()
+    assert (entry.kg, entry.date, entry.message_id) == (80.0, utcnow().date(), inbound.id)
+    assert (entry.trainee_id, entry.trainer_id) == (trainee.id, trainee.trainer_id)
+    assert sent == [(PHONE, "Zapisałem 80 kg.")]
+
+
+def test_a_correction_replaces_the_days_weight(client, sent, trainee, llm_returns):
+    llm_returns(weight_output(80.0), weight_output(81.0))
+    post_signed(client, text_payload("wamid.1", "yanek zanotuj 80kg"))
+    post_signed(client, text_payload("wamid.2", "yanek sorki, zanotuj 81kg"))
+
+    [entry] = stored_weights()
+    correction = next(m for m in stored_messages() if m.wamid == "wamid.2")
+    assert (entry.kg, entry.message_id) == (81.0, correction.id)
+
+
+def test_a_failed_save_sends_the_apology_instead_of_the_confirmation(
+    client, sent, trainee, llm_returns, monkeypatch
+):
+    def fail(*args):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(entries, "save", fail)
+    llm_returns(weight_output(80.0, reply="Zapisałem 80 kg."))
+    post_signed(client, text_payload("wamid.1", "yanek waga 80"))
+    assert sent == [(PHONE, main.APOLOGY)]
+
+
+def test_a_message_the_trainee_followed_up_on_is_not_answered(sent, trainee, llm_returns):
+    # Both arrived before the first reply was ready; the second one's reply covers both.
+    with SessionLocal() as session:
+        first, second = (
+            Message(direction="in", phone=PHONE, type="text", body=body, trainee_id=trainee.id)
+            for body in ("yanek 80", "yanek sorki, 81")
+        )
+        session.add_all([first, second])
+        session.commit()
+    llm_returns(weight_output(80.0), weight_output(81.0))
+
+    main.reply(first.id)
+    assert sent == []
+    assert stored_weights() == []
+
+    main.reply(second.id)
+    assert [e.kg for e in stored_weights()] == [81.0]
+    assert len(sent) == 1

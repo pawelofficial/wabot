@@ -25,19 +25,17 @@ class Settings(DatabaseSettings):
 
     openai_api_key: str = ""
     openai_model: str = "gpt-5.6-luna"
-    # Training plan injected into the prompt, for every trainee until plans live in the db.
-    training_plan_file: str | None = "plans/example.txt"
     # What chat history a reply call gets. "marked": the whole recent history, with a marker
     # after the bot's last message; the LLM extracts only what's below it. "new_only": only the
     # trainee's messages since the bot's last message (the code drops the rest) – use it if the
-    # LLM keeps re-extracting reports it already handled, at the cost of less context.
+    # LLM keeps re-extracting reports it already handled, at the cost of less context: a
+    # correction of a training can't see the earlier report, so it can replace the whole day
+    # with just the corrected part.
     history_mode: Literal["marked", "new_only"] = "marked"
     # Use utils.hardcoded_first_message() instead of the LLM for messages the bot starts.
     hardcoded_first_message: bool = False
     # Your own number (digits only); where the scripts send test messages.
     whatsapp_test_recipient: str | None = None
-    # Until trainees have their own timezone (milestone 2).
-    default_timezone: str = "Europe/Warsaw"
 
 
 @lru_cache
