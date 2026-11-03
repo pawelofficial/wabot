@@ -16,12 +16,13 @@ A walk through what happens at runtime: which function calls which, in what orde
 | `src/wabot/llm_output.py` | The shape of the model's answer (pydantic models → JSON schema) and `validate_output()` |
 | `src/wabot/entries.py` | Saving the extracted weight and training into the db (one per day, newer replaces older) |
 | `src/wabot/prompts.yaml` | The Polish prompt texts |
-| `src/wabot/exercises.yaml` / `exercises.py` | The exercise catalog: fixed IDs, names, aliases |
+| `src/wabot/exercises.yaml` / `exercises.py` | The exercise catalog: fixed IDs, names, aliases; `lookup()` finds an ID by name |
+| `src/wabot/plans.py` | Training plans: days of catalog exercises with the trainer's replacements; loading, checking, the text the LLM sees |
 | `src/wabot/models.py` | Database tables (see the end of this file) |
 | `src/wabot/db.py` | Database engine and sessions |
 | `src/wabot/config.py` | `Settings`: every value from `.env` |
 | `src/wabot/utils.py` | `hardcoded_first_message()`, a fixed text used instead of the LLM |
-| `plans/example.txt` | Example training plan; `scripts/add_trainee.py` gives it to new trainees |
+| `plans/example.yaml` | Example training plan; `scripts/add_trainee.py` gives it to new trainees |
 | `run.sh` | Local start: migrate, test message, tunnel, webhook, uvicorn |
 | `scripts/` | One-off command-line tools (see Flows 3 and 5) |
 
@@ -31,8 +32,7 @@ Some files do work the moment they're imported, once per process:
 
 - `config.py`: nothing yet; `get_settings()` reads `.env` when it's first called and caches the result.
 - `db.py`: creates the SQLAlchemy `engine` from `DATABASE_URL` (default `sqlite:///wabot.db`) and the `SessionLocal` session factory. For SQLite it turns on WAL, a 5 s busy timeout and foreign keys.
-- `exercises.py`: reads `exercises.yaml` into `CATALOG` (a list of `CatalogExercise`) and `IDS` (a tuple of the IDs). Fails on duplicate IDs.
-- `llm_output.py`: builds the pydantic models. `ExerciseId = Literal[exercises.IDS]`, so the allowed exercise IDs are fixed at this point.
+- `exercises.py`: reads `exercises.yaml` into `CATALOG` (a list of `CatalogExercise`), `IDS`, `BY_ID` and a name/alias → ID table for `lookup()`. Fails on duplicate IDs. `ExerciseId = Literal[IDS]` fixes the allowed exercise IDs at this point, for plans and for the LLM's output.
 - `assistant.py`: reads `prompts.yaml` into `PROMPTS`.
 - `main.py`: sets up logging and creates the FastAPI `app`.
 
@@ -63,7 +63,7 @@ main.reply(message_id)                          runs after the 200, in the backg
   ├─ conversation.recent_history(session, trainee.id, now)
   │     → the trainee's last 20 messages from the last 24 h, oldest first (incl. this one)
   ├─ assistant.generate_reply(settings, trainee, history, now)   → LlmOutput   (see Flow 2)
-  │     uses trainee.training_plan and trainee.timezone
+  │     uses the trainee's plan (plans.of(trainee)) and timezone
   │     any exception → result = None
   ├─ conversation.asked_again(session, message)
   │     the trainee called the bot again after this message, with no bot message in between
@@ -98,10 +98,10 @@ What happens inside `assistant.generate_reply(settings, trainee, history, now)`:
 
 ```
 generate_reply()
-  ├─ build_instructions(trainee.training_plan)   → the system prompt (one string):
+  ├─ plan = plans.of(trainee)              the JSON in trainees.training_plan → TrainingPlan
+  ├─ build_instructions(plan)              → the system prompt (one string):
   │     PROMPTS["system"]                     who Yanek is, all extraction and reply rules
-  │   + PROMPTS["exercise_catalog"]           with exercises.catalog_text() filled in
-  │   + PROMPTS["training_plan"]              with the plan text filled in
+  │   + PROMPTS["training_plan"]              with plan.prompt_text() filled in (below)
   │     (or PROMPTS["no_training_plan"] when the trainee has no plan)
   ├─ reply_input(settings, history)       → the chat turns, shaped by HISTORY_MODE:
   │     split_at_last_bot_message(history) → (context, new)
@@ -130,7 +130,19 @@ generate_reply()
                  last attempt  → raise (main.reply() then sends APOLOGY)
 ```
 
-The order of the prompt matters for cost: the parts that are the same for everyone (rules, catalog) come first and the per-trainee parts (plan, history, today's date) come later, so OpenAI can cache the shared prefix.
+The order of the prompt matters for cost: the part that is the same for everyone (the rules) comes first and the per-trainee parts (plan, history, today's date) come later, so OpenAI can cache the shared prefix.
+
+### What the model sees of the plan
+
+The whole exercise catalog is **not** in the prompt, only the plan's exercises. `plan.prompt_text()` gives the trainer's notes, then each day with its exercises: ID, catalog name, aliases, dose, and on the next line the replacements the trainer allows:
+
+```
+Dzień A – poniedziałek (dół ciała)
+- back_squat: Przysiad ze sztangą (też: przysiad, przysiady, siady, squat, back squat) – 4 x 6–8, ok. 60 kg
+  zamienniki: leg_press: Suwnica na nogi (też: suwnica, ...); bulgarian_split_squat: Przysiad bułgarski (też: ...)
+```
+
+That's enough for "suwnica zamiast siadów" (`leg_press` replacing `back_squat`). For an exercise that isn't in the plan or its replacements, the model gives no ID, only the full Polish name. `validate_output()` then finds the ID in the catalog by name or alias (`exercises.lookup()`).
 
 ### What the model returns
 
@@ -144,11 +156,13 @@ The model must answer with JSON matching `LlmOutput` (strict mode, so the struct
 }
 ```
 
-`training`, when a session is reported, has `date`, `plan_day` (copied exactly from the plan), `status` (`done` / `partial` / `skipped`), `exercises`, `missed_exercises` and `notes`. Each exercise has `exercise_id` (a catalog ID or null), `name`, `in_plan`, `sets`, `reps`, `weight_kg`, `replaces` (the plan exercise it was done instead of) and `comment`. What each field means is explained to the model in `prompts.yaml`, in Polish.
+`training`, when a session is reported, has `date`, `plan_day` (copied exactly from the plan), `status` (`done` / `partial` / `skipped`), `exercises`, `missed_exercises` and `notes`. `plan_day` is the day's name and `missed_exercises` are plan exercise IDs. Each exercise has `exercise_id` (a catalog ID or null), `name`, `in_plan`, `sets`, `reps`, `weight_kg`, `replaces` (the ID of the plan exercise it was done instead of) and `comment`. What each field means is explained to the model in `prompts.yaml`, in Polish.
 
 For a correction or addition to a training reported earlier ("sorki, przysiad był na 65 kg"), the prompt tells the model to return the whole session again, with the change, because the save replaces the day (Flow 2b). The model can only do that if the earlier report is in the history it gets.
 
 ### `validate_output(raw, today, plan)`
+
+`plan` is the trainee's `TrainingPlan` or None.
 
 OpenAI guarantees the structure; this function checks that the **values** make sense, and collects every problem before raising so the retry can fix them all at once:
 
@@ -156,8 +170,8 @@ OpenAI guarantees the structure; this function checks that the **values** make s
 2. `reply`: not empty, not JSON, at most 4096 characters (WhatsApp's limit), only Latin letters (Polish letters and emoji are fine; Cyrillic or Armenian slip-ins are not).
 3. `weight`: 30–300 kg, date not in the future and not more than 31 days ago.
 4. `training`: same date window; `skipped` has no exercises, `done`/`partial` have at least one; sets 1–20; load 0–500 kg; a `replaces` exercise has `in_plan: false` and isn't also listed as missed.
-5. Against the plan: `plan_day`, every `in_plan` exercise name, every missed exercise and every `replaces` must appear in the plan text (case-insensitive substring). Without a plan, none of them may be set.
-6. Everything passed: `**bold**` (Markdown) becomes `*bold*` (WhatsApp) in the reply, then the `LlmOutput` is returned.
+5. Against the plan (`_check_against_plan()`): `plan_day` must be one of the plan's days (case and spacing don't matter; it's set to the plan's exact name). An `in_plan` exercise needs the ID of an exercise planned for that day. A planned ID with `in_plan: false` is wrong unless it replaces something. `replaces` and `missed_exercises` must be IDs planned for that day. Without `plan_day`, any day of the plan counts. Without a plan, `plan_day`, `in_plan`, `replaces` and `missed_exercises` must all be empty.
+6. Everything passed, so the code fixes what it can itself: `**bold**` (Markdown) becomes `*bold*` (WhatsApp) in the reply. `_match_to_catalog()` gives every exercise that isn't in the plan or its replacements the catalog ID matching its name ("Pompki" → `push_up`), keeps the model's own ID if the name matches nothing, and leaves it null if there's neither. Then the `LlmOutput` is returned.
 
 ## Flow 2b: saving the extracted data
 
@@ -237,15 +251,32 @@ Until the dashboard exists, this is the only way to add a trainee or change thei
 ```
 add_trainee.py [--phone] [--name] [--trainer] [--plan FILE | --no-plan] [--consent-date] [--timezone]
   ├─ phone = --phone or WHATSAPP_TEST_RECIPIENT → trainees.normalize_phone()  ("+48 111..." → "48111...")
+  ├─ plans.load(--plan or plans/example.yaml)   YAML → TrainingPlan
+  │     an ID not in exercises.yaml, a typo in a key, an empty day → exit with the error
   ├─ trainees.find_by_phone()
-  │     none  → new Trainee with defaults: "Podopieczny testowy", plans/example.txt,
+  │     none  → new Trainee with defaults: "Podopieczny testowy", plans/example.yaml,
   │             consent date today, Europe/Warsaw, trainer --trainer or "Trener testowy"
   │             (trainees.trainer_named() finds the trainer or creates it)
   │     found → only the options you pass change
   └─ COMMIT, print what is saved
 ```
 
-With no options it registers your own number with the example plan, which is all you need for local testing.
+With no options it registers your own number with the example plan, which is all you need for local testing. The plan is saved as JSON (`plans.to_db()`).
+
+A plan file looks like this (see `plans/example.yaml`). Every `id` and every replacement is an ID from `src/wabot/exercises.yaml`, and everything apart from `id` is optional:
+
+```yaml
+notes: |
+  Cel: redukcja. We wtorek i sobotę 8–10 tys. kroków.
+days:
+  - name: Dzień A – poniedziałek (dół ciała)
+    exercises:
+      - id: back_squat
+        sets: 4
+        reps: 6–8
+        weight: ok. 60 kg
+        replacements: [leg_press, bulgarian_split_squat]
+```
 
 ## The database
 
@@ -260,14 +291,16 @@ trainers ──< trainees ──< messages
 | Table | Columns | |
 |---|---|---|
 | `trainers` | `id`, `name`, `created_at` | created by `scripts/add_trainee.py` for now |
-| `trainees` | `id`, `trainer_id`, `phone` (unique), `name`, `timezone`, `consent_date`, `training_plan`, `created_at` | `phone` is how a message finds its trainee; `training_plan` goes into the prompt |
+| `trainees` | `id`, `trainer_id`, `phone` (unique), `name`, `timezone`, `consent_date`, `training_plan` (JSON), `created_at` | `phone` is how a message finds its trainee; `training_plan` is a `plans.TrainingPlan`, read with `plans.of(trainee)` |
 | `messages` | `id`, `wamid` (unique), `direction` (`in`/`out`), `phone`, `type`, `body`, `trainee_id`, `trainer_id`, `created_at` | chat history and webhook dedup; `body` and `trainee_id` are null for unregistered numbers (and for messages from before migration 0002) |
 | `weight_entries` | `id`, `trainer_id`, `trainee_id`, `date`, `kg`, `message_id`, `created_at`, `updated_at` | |
-| `training_checkins` | `id`, `trainer_id`, `trainee_id`, `date`, `plan_day`, `status`, `missed_exercises` (JSON list), `notes`, `message_id`, `created_at`, `updated_at` | |
-| `training_exercises` | `id`, `checkin_id`, `exercise_id`, `name`, `in_plan`, `sets`, `reps`, `weight_kg`, `replaces`, `comment` | same fields as `llm_output.Exercise`; `exercise_id` is the catalog ID progress is charted by |
+| `training_checkins` | `id`, `trainer_id`, `trainee_id`, `date`, `plan_day`, `status`, `missed_exercises` (JSON list of exercise IDs), `notes`, `message_id`, `created_at`, `updated_at` | |
+| `training_exercises` | `id`, `checkin_id`, `exercise_id`, `name`, `in_plan`, `sets`, `reps`, `weight_kg`, `replaces`, `comment` | same fields as `llm_output.Exercise`; `exercise_id` is the catalog ID progress is charted by, `replaces` the ID of the replaced plan exercise |
 
 - `message_id` on an entry is the trainee's message the bot answered when it saved the entry (the "yanek ..." one), so the dashboard can show the original message next to it.
 - All timestamps are UTC (`UTCDateTime`, so SQLite and Postgres behave the same). `date` columns are the trainee's local day.
+- Migration 0003 turned `training_plan` from text into JSON and cleared the old free-text plans. Register a plan again with `scripts/add_trainee.py --plan plans/example.yaml`.
+- On SQLite, `alembic/env.py` turns foreign keys off while migrating. Batch mode changes a table by copying it and dropping the old one, which foreign keys would block.
 
 To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLite, or a SQLite extension for VS Code).
 
@@ -277,8 +310,10 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 |---|---|
 | change what Yanek says or how it extracts | `src/wabot/prompts.yaml` (`system`) |
 | add a field to the extracted JSON | the pydantic model in `llm_output.py`, the rules in `prompts.yaml`, a check in `validate_output()` if needed, a column in `models.py` + a migration, tests in `tests/test_llm_output.py` and `tests/test_entries.py` |
-| add an exercise | a new entry in `exercises.yaml` (never rename an existing ID) |
-| change a trainee's training plan | `uv run python scripts/add_trainee.py --plan path/to/plan.txt` |
+| add an exercise | a new entry in `exercises.yaml` (never rename an existing ID); plans can use it right away |
+| teach the bot a nickname ("siady") | add it to the exercise's `aliases` in `exercises.yaml` |
+| change a trainee's training plan | edit a copy of `plans/example.yaml`, then `uv run python scripts/add_trainee.py --plan path/to/plan.yaml` |
+| change how the plan looks to the LLM | `TrainingPlan.prompt_text()` in `plans.py`, and the `training_plan` text in `prompts.yaml` that explains the format |
 | register another trainee | `uv run python scripts/add_trainee.py --phone 48... --name ...` |
 | change the reply for unknown numbers | `UNREGISTERED` in `main.py` |
 | change the trigger word | `BOT_NAME` in `conversation.py` |
@@ -299,5 +334,5 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 
 - `test_webhook.py`: Flow 1 through FastAPI's test client, with the LLM and `send_text` replaced by fakes: replies, dedup, unregistered numbers, saving, corrections, a failed save, a message followed up on. Its `add_trainee()` helper is used by the other test files.
 - `test_entries.py`: Flow 2b: one entry per day, corrections, out-of-order saves, exercises replaced.
-- `test_conversation.py`: the name trigger, history per trainee, `asked_again()`, plan injection, the trainee's local date, the catalog in the prompt, `scripts/add_trainee.py`.
-- `test_llm_output.py`: `validate_output()` accepting and rejecting outputs, the retry in `_complete()` with a fake OpenAI client, the schema.
+- `test_conversation.py`: the name trigger, history per trainee, `asked_again()`, plan injection and the plan text, bad plans, the example plan, `exercises.lookup()`, the trainee's local date, `scripts/add_trainee.py`.
+- `test_llm_output.py`: `validate_output()` accepting and rejecting outputs (incl. the checks against the plan's IDs and catalog matching by name), the retry in `_complete()` with a fake OpenAI client, the schema.

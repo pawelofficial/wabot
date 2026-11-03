@@ -37,6 +37,11 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     with make_engine(database_url).connect() as connection:
+        if connection.dialect.name == "sqlite":
+            # Batch mode changes a table by copying it into a new one and dropping the old;
+            # with foreign keys on, dropping a table other tables point to fails.
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.commit()
         # Batch mode lets ALTER TABLE migrations work on SQLite.
         context.configure(
             connection=connection,

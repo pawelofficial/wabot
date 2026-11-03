@@ -34,10 +34,11 @@ uv run python scripts/send_test_custom_first_message.py [--dry-run]   # bot-star
 - `src/wabot/models.py` – SQLAlchemy models (`Trainer`, `Trainee`, `Message`, `WeightEntry`, `TrainingCheckin`, `TrainingExercise`); use `UTCDateTime` for every timestamp
 - `src/wabot/db.py` – engine and sessions (SQLite runs with WAL and a busy timeout)
 - `src/wabot/assistant.py` – LLM calls (OpenAI Responses API, `OPENAI_MODEL`): `generate_reply(settings, trainee, history, now)` returns an `LlmOutput` (reply text + extracted `weight` / `training`), `generate_first_message()`; `build_instructions()` injects the trainee's training plan; dates are in the trainee's timezone; output that fails validation is retried once with the errors
-- `src/wabot/prompts.yaml` – the LLM prompts: `system`, `training_plan` (`{training_plan}` is replaced with the plan text), `no_training_plan`, `new_messages_marker` (inserted after the bot's last message, `HISTORY_MODE`), `first_message_task`; loaded at startup. Keep the field rules in sync with `llm_output.py`
-- `src/wabot/llm_output.py` – pydantic models of the LLM output (the JSON schema sent to OpenAI is generated from them) and `validate_output()`: structure, plausible values, dates, names that must be in the plan
-- `src/wabot/exercises.yaml` + `exercises.py` – exercise catalog (fixed IDs, Polish names, aliases, muscle group); injected into the prompt, and its IDs are the allowed values of `exercise_id` in the schema. IDs are permanent once data uses them – add, don't rename
-- `plans/example.txt` – example training plan (free text, as a trainer writes it); `scripts/add_trainee.py` gives it to new trainees
+- `src/wabot/prompts.yaml` – the LLM prompts: `system`, `training_plan` (`{training_plan}` is replaced with `plans.TrainingPlan.prompt_text()`), `no_training_plan`, `new_messages_marker` (inserted after the bot's last message, `HISTORY_MODE`), `first_message_task`; loaded at startup. Keep the field rules in sync with `llm_output.py`
+- `src/wabot/llm_output.py` – pydantic models of the LLM output (the JSON schema sent to OpenAI is generated from them) and `validate_output()`: structure, plausible values, dates, plan days and exercise IDs that must be in the plan; IDs of exercises outside the plan come from the catalog by name
+- `src/wabot/exercises.yaml` + `exercises.py` – exercise catalog (fixed IDs, Polish names, aliases, muscle group); its IDs are the allowed values of `exercise_id` in the schema and of plan exercises; `lookup()` matches a name or alias. Not sent to the LLM as a whole. IDs are permanent once data uses them – add, don't rename
+- `src/wabot/plans.py` – training plans: pydantic models (days of catalog exercise IDs with sets/reps/weight and the trainer's allowed replacements, plus notes), `load()` a YAML file, `of(trainee)` from the db (JSON), `prompt_text()` for the LLM
+- `plans/example.yaml` – example training plan; `scripts/add_trainee.py` gives it to new trainees
 - `scripts/add_trainee.py` – registers or updates a trainee and their trainer until the dashboard exists
 - `alembic/` – migrations; `UTCDateTime` is rendered as plain `DateTime(timezone=True)`
 
@@ -51,7 +52,7 @@ The product plan, decisions and milestones are in `docs/PLAN.md`; read it before
 - Meta WhatsApp Cloud API directly. Reminders outside the 24 h window need approved templates.
 - Multi-trainer: every trainee-owned row carries `trainer_id`; the trainee is resolved server-side from the sender's phone number, and the LLM's tools never accept a trainee ID from the model.
 - The bot answers only messages that mention it by name ("yanek"); everything else is stored as history.
-- Bot language is Polish. Trainee plans are free text written by the trainer.
+- Bot language is Polish. Trainee plans are built from the exercise catalog (IDs plus the replacements the trainer allows); only the plan's exercises go into the prompt.
 - Trainers register their trainees in the dashboard (consent is collected on paper); unknown numbers get a fixed reply.
 - Photos are stored and shown on the dashboard, never sent to the LLM.
 - Planned tooling: `uv`, `ruff`, `pytest`.

@@ -9,10 +9,11 @@ from zoneinfo import ZoneInfo
 import openai
 import yaml
 
-from wabot import exercises, llm_output
+from wabot import llm_output, plans
 from wabot.config import Settings
 from wabot.llm_output import LlmOutput
 from wabot.models import Message, Trainee
+from wabot.plans import TrainingPlan
 
 log = logging.getLogger(__name__)
 
@@ -70,15 +71,15 @@ def _today(trainee: Trainee, now: datetime) -> str:
 REFUSAL = "Przepraszam, nie mogę w tym pomóc. Zapytaj proszę swojego trenera."
 
 
-def build_instructions(training_plan: str | None, task: str | None = None) -> str:
-    """System prompt with the trainee's plan injected. The static part comes first so the
-    shared prefix stays cacheable across trainees."""
-    if training_plan:
-        plan = PROMPTS["training_plan"].replace("{training_plan}", training_plan.strip())
+def build_instructions(plan: TrainingPlan | None, task: str | None = None) -> str:
+    """System prompt with the trainee's plan injected (its exercises with their catalog IDs,
+    names, aliases and replacements; not the whole catalog). The static part comes first so
+    the shared prefix stays cacheable across trainees."""
+    if plan:
+        plan_part = PROMPTS["training_plan"].replace("{training_plan}", plan.prompt_text())
     else:
-        plan = PROMPTS["no_training_plan"]
-    catalog = PROMPTS["exercise_catalog"].replace("{exercise_catalog}", exercises.catalog_text())
-    parts = [PROMPTS["system"], catalog, plan]
+        plan_part = PROMPTS["no_training_plan"]
+    parts = [PROMPTS["system"], plan_part]
     if task:
         parts.append(task)
     return "\n".join(parts)
@@ -93,7 +94,7 @@ def _complete(
     instructions: str,
     messages: list[dict],
     today: date,
-    training_plan: str | None,
+    plan: TrainingPlan | None,
 ) -> LlmOutput:
     """Call the model; today (the trainee's local date) and the plan are for validation."""
     if not settings.openai_api_key:
@@ -129,7 +130,7 @@ def _complete(
         if not raw:
             raise RuntimeError(f"Empty response ({response.status}: {response.incomplete_details})")
         try:
-            return llm_output.validate_output(raw, today, training_plan)
+            return llm_output.validate_output(raw, today, plan)
         except llm_output.InvalidOutputError as e:
             log.warning("Invalid LLM output (attempt %d/%d): %s", attempt, ATTEMPTS, e)
             if attempt == ATTEMPTS:
@@ -152,16 +153,17 @@ def generate_reply(
 ) -> LlmOutput:
     """Reply to the trainee's latest message (the last entry of history) and extract the
     weight and training it reports. The trainee's plan goes into the prompt."""
+    plan = plans.of(trainee)
     return _complete(
         settings,
-        build_instructions(trainee.training_plan),
+        build_instructions(plan),
         [
             *reply_input(settings, history),
             # Per-request context goes after the history so the prefix stays cacheable.
             {"role": "developer", "content": _today(trainee, now)},
         ],
         _local(trainee, now).date(),
-        trainee.training_plan,
+        plan,
     )
 
 
@@ -169,15 +171,16 @@ def generate_first_message(
     settings: Settings, trainee: Trainee, history: list[Message], now: datetime
 ) -> str:
     """A message the bot sends on its own, e.g. to ask for a report."""
+    plan = plans.of(trainee)
     output = _complete(
         settings,
-        build_instructions(trainee.training_plan, PROMPTS["first_message_task"]),
+        build_instructions(plan, PROMPTS["first_message_task"]),
         [
             *to_llm_messages(history),
             # The API needs the conversation to end with a user turn.
             {"role": "user", "content": f"[automatyczny wyzwalacz] {_today(trainee, now)}"},
         ],
         _local(trainee, now).date(),
-        trainee.training_plan,
+        plan,
     )
     return output.reply

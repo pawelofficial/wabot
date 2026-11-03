@@ -1,21 +1,21 @@
 import datetime as dt
-import re
 import runpy
 import sys
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
-from wabot import assistant, conversation, exercises, main, utils
+from wabot import assistant, conversation, exercises, main, plans, utils
 from wabot.config import Settings
 from wabot.db import SessionLocal
 from wabot.models import DEFAULT_TIMEZONE, Message, Trainee, utcnow
 
-from .test_webhook import PHONE, add_trainee, post_signed, text_payload
+from .test_webhook import PHONE, add_trainee, plan_with_day, post_signed, text_payload
 
-EXAMPLE_PLAN = Path("plans/example.txt")
+EXAMPLE_PLAN = Path("plans/example.yaml")
 
 
 def add_message(
@@ -35,7 +35,7 @@ def add_message(
         return msg
 
 
-def unsaved_trainee(plan: str | None = None) -> Trainee:
+def unsaved_trainee(plan: dict | None = None) -> Trainee:
     return Trainee(phone=PHONE, training_plan=plan, timezone=DEFAULT_TIMEZONE)
 
 
@@ -163,10 +163,75 @@ def test_mentions_bot(text, expected):
 
 
 def test_training_plan_is_injected_into_the_instructions():
-    instructions = assistant.build_instructions("Dzień A – przysiad 4 x 6")
+    plan = plans.TrainingPlan.model_validate(plan_with_day("Dzień A"))
+    instructions = assistant.build_instructions(plan)
     assert instructions.startswith(assistant.PROMPTS["system"])
-    assert "<plan_treningowy>\nDzień A – przysiad 4 x 6\n</plan_treningowy>" in instructions
+    assert f"<plan_treningowy>\n{plan.prompt_text()}\n</plan_treningowy>" in instructions
     assert "{training_plan}" not in instructions
+
+
+def test_plan_text_shows_ids_aliases_and_replacements():
+    plan = plans.TrainingPlan.model_validate(
+        {
+            "notes": "Cel: siła.",
+            "days": [
+                {
+                    "name": "Dzień A",
+                    "exercises": [
+                        {
+                            "id": "back_squat",
+                            "sets": 4,
+                            "reps": "6–8",
+                            "weight": "ok. 60 kg",
+                            "replacements": ["leg_press"],
+                        },
+                        {"id": "plank", "reps": "45 s"},
+                    ],
+                }
+            ],
+        }
+    )
+    assert plan.prompt_text() == (
+        "Cel: siła.\n\nDzień A\n"
+        "- back_squat: Przysiad ze sztangą (też: przysiad, przysiady, siady, squat, back squat)"
+        " – 4 x 6–8, ok. 60 kg\n"
+        "  zamienniki: leg_press: Suwnica na nogi (też: suwnica, wypychanie nóg, leg press)\n"
+        "- plank: Plank (też: deska, planka) – 45 s"
+    )
+
+
+def test_the_whole_catalog_is_not_in_the_instructions():
+    plan = plans.TrainingPlan.model_validate(plan_with_day("Dzień A"))
+    instructions = assistant.build_instructions(plan)
+    assert "back_squat" in instructions
+    assert "leg_press" not in instructions
+
+
+@pytest.mark.parametrize(
+    ("plan", "error"),
+    [
+        ({"days": [{"name": "A", "exercises": [{"id": "squat_jump"}]}]}, "squat_jump"),
+        (
+            {"days": [{"name": "A", "exercises": [{"id": "plank", "replacements": ["plank"]}]}]},
+            "its own replacement",
+        ),
+        ({"days": [{"name": "A", "exercises": [{"id": "plank", "replacement": []}]}]}, "Extra"),
+        ({"days": [{"name": "A", "exercises": []}]}, "at least 1"),
+        (
+            {
+                "days": [
+                    {"name": "A", "exercises": [{"id": "plank"}]},
+                    {"name": "a", "exercises": [{"id": "plank"}]},
+                ]
+            },
+            "same name",
+        ),
+    ],
+)
+def test_bad_plans_are_rejected(plan, error):
+    with pytest.raises(ValidationError) as e:
+        plans.TrainingPlan.model_validate(plan)
+    assert error in str(e.value)
 
 
 def test_instructions_without_a_plan_say_so():
@@ -176,27 +241,18 @@ def test_instructions_without_a_plan_say_so():
     assert instructions.endswith("TASK")
 
 
-def test_example_training_plan_exists():
-    assert "Dzień A" in EXAMPLE_PLAN.read_text(encoding="utf-8")
+def test_example_training_plan_is_valid():
+    # Loading checks every ID against the catalog.
+    plan = plans.load(EXAMPLE_PLAN)
+    assert [d.name[:7] for d in plan.days] == ["Dzień A", "Dzień B", "Dzień C"]
 
 
-def test_exercise_catalog_is_in_the_instructions():
-    instructions = assistant.build_instructions(None)
-    assert "- leg_press: Suwnica na nogi (też: suwnica, wypychanie nóg, leg press) [nogi]" in (
-        instructions
-    )
-    assert "{exercise_catalog}" not in instructions
-
-
-def test_every_example_plan_exercise_is_in_the_catalog():
-    plan = EXAMPLE_PLAN.read_text(encoding="utf-8").casefold()
-    names = [e.name.casefold() for e in exercises.CATALOG]
-    missing = [
-        line
-        for line in plan.splitlines()
-        if re.match(r"\d+\. ", line) and not any(name in line for name in names)
-    ]
-    assert missing == []
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [("Siady", "back_squat"), ("  suwnica ", "leg_press"), ("Pompki", "push_up"), ("joga", None)],
+)
+def test_catalog_lookup_by_name_or_alias(name, expected):
+    assert exercises.lookup(name) == expected
 
 
 def chat(*turns: tuple[str, str]) -> list[Message]:
@@ -278,7 +334,7 @@ def test_add_trainee_registers_and_then_updates(monkeypatch, capsys):
             "Ania",
             "Trener testowy",
         )
-        assert trainee.training_plan == EXAMPLE_PLAN.read_text(encoding="utf-8")
+        assert plans.of(trainee) == plans.load(EXAMPLE_PLAN)
         assert trainee.consent_date == dt.date.today()
 
     run_add_trainee(monkeypatch, "--phone", PHONE, "--no-plan", "--trainer", "Tomek")

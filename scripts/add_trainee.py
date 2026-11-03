@@ -6,7 +6,7 @@ Running it again for the same number changes only the options you pass.
 
 Run from the project root, after `uv run alembic upgrade head`:
     uv run python scripts/add_trainee.py
-    uv run python scripts/add_trainee.py --name "Ania" --plan plans/example.txt
+    uv run python scripts/add_trainee.py --name "Ania" --plan plans/example.yaml
     uv run python scripts/add_trainee.py --phone 48123456789 --trainer "Trener Tomek"
     uv run python scripts/add_trainee.py --no-plan
 """
@@ -17,16 +17,17 @@ import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pydantic import ValidationError
 from sqlalchemy.exc import OperationalError
 
-from wabot import trainees
+from wabot import plans, trainees
 from wabot.config import get_settings
 from wabot.db import SessionLocal
 from wabot.models import DEFAULT_TIMEZONE, Trainee
 
 DEFAULT_TRAINER = "Trener testowy"
 DEFAULT_NAME = "Podopieczny testowy"
-DEFAULT_PLAN = Path("plans/example.txt")
+DEFAULT_PLAN = Path("plans/example.yaml")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -41,7 +42,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--name", help=f"trainee's name (new trainee: {DEFAULT_NAME!r})")
     parser.add_argument("--trainer", help=f"trainer's name, created if new ({DEFAULT_TRAINER!r})")
     plan = parser.add_mutually_exclusive_group()
-    plan.add_argument("--plan", type=Path, help=f"training plan text file ({DEFAULT_PLAN})")
+    plan.add_argument("--plan", type=Path, help=f"training plan YAML file, see {DEFAULT_PLAN}")
     plan.add_argument("--no-plan", action="store_true", help="remove the training plan")
     parser.add_argument(
         "--consent-date",
@@ -63,6 +64,12 @@ def main(argv: list[str] | None = None) -> None:
             ZoneInfo(args.timezone)
         except (ValueError, ZoneInfoNotFoundError):
             sys.exit(f"Unknown timezone {args.timezone!r}, e.g. Europe/Warsaw")
+    plan_file = args.plan or DEFAULT_PLAN
+    try:
+        plan = plans.load(plan_file)
+    except ValidationError as e:
+        # e.g. an exercise ID that isn't in src/wabot/exercises.yaml
+        sys.exit(f"{plan_file} isn't a valid plan:\n{e}")
 
     with SessionLocal() as session:
         try:
@@ -77,7 +84,7 @@ def main(argv: list[str] | None = None) -> None:
                 name=DEFAULT_NAME,
                 consent_date=dt.date.today(),
                 timezone=DEFAULT_TIMEZONE,
-                training_plan=DEFAULT_PLAN.read_text(encoding="utf-8"),
+                training_plan=plans.to_db(plan),
             )
             session.add(trainee)
         elif args.trainer:
@@ -85,7 +92,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.name:
             trainee.name = args.name
         if args.plan:
-            trainee.training_plan = args.plan.read_text(encoding="utf-8")
+            trainee.training_plan = plans.to_db(plan)
         if args.no_plan:
             trainee.training_plan = None
         if args.consent_date:
@@ -94,11 +101,15 @@ def main(argv: list[str] | None = None) -> None:
             trainee.timezone = args.timezone
         session.commit()
 
-        plan_lines = len(trainee.training_plan.splitlines()) if trainee.training_plan else 0
+        saved = plans.of(trainee)
+        plan_summary = (
+            f"{len(saved.days)} days, {sum(len(d.exercises) for d in saved.days)} exercises"
+            if saved
+            else "none"
+        )
         print(
             f"{'Registered' if created else 'Updated'} {trainee.name} ({trainee.phone}), "
-            f"trainer {trainee.trainer.name}, plan: "
-            f"{f'{plan_lines} lines' if plan_lines else 'none'}, "
+            f"trainer {trainee.trainer.name}, plan: {plan_summary}, "
             f"consent {trainee.consent_date}, {trainee.timezone}"
         )
 

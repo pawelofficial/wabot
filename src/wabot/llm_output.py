@@ -2,7 +2,8 @@
 
 The pydantic models are the single source of the structure: the JSON schema sent to OpenAI is
 generated from them (`json_schema()`), and `validate_output()` parses the response into them and
-then checks the values – plausible ranges, dates, and names that must come from the training plan.
+then checks the values – plausible ranges, dates, and exercise IDs that must come from the
+training plan.
 The meaning of each field is explained to the model in prompts.yaml.
 """
 
@@ -14,6 +15,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from wabot import exercises
+from wabot.exercises import ExerciseId
+from wabot.plans import TrainingPlan
 
 MIN_KG, MAX_KG = 30, 300
 MAX_SETS = 20
@@ -34,20 +37,18 @@ class Weight(_Strict):
     date: dt.date
 
 
-# One of the catalog IDs (exercises.yaml); the schema lists them, so the model can't invent one.
-ExerciseId = Literal[exercises.IDS]
-
-
 class Exercise(_Strict):
-    # null when the exercise isn't in the catalog.
+    # A catalog ID (exercises.yaml) from the trainee's plan: a planned exercise or one of its
+    # replacements. The model sets null for anything else; validate_output() then looks the
+    # name up in the catalog, and it stays null outside the catalog.
     exercise_id: ExerciseId | None
     name: str
     in_plan: bool
     sets: int | None
     reps: str | None
     weight_kg: float | None
-    # The plan exercise this one was done instead of ("suwnica zamiast przysiadów").
-    replaces: str | None
+    # ID of the plan exercise this one was done instead of ("suwnica zamiast przysiadów").
+    replaces: ExerciseId | None
     # Anything else about this exercise, in the trainee's words.
     comment: str | None
 
@@ -57,7 +58,8 @@ class Training(_Strict):
     plan_day: str | None
     status: Literal["done", "partial", "skipped"]
     exercises: list[Exercise]
-    missed_exercises: list[str]
+    # IDs of the day's plan exercises the trainee said they didn't do.
+    missed_exercises: list[ExerciseId]
     notes: str | None
 
 
@@ -76,10 +78,6 @@ class InvalidOutputError(Exception):
 def json_schema() -> dict:
     """The schema for OpenAI's strict structured outputs."""
     return LlmOutput.model_json_schema()
-
-
-def _in_plan(name: str, plan: str) -> bool:
-    return name.strip().casefold() in plan.casefold()
 
 
 def _foreign_letters(text: str) -> str:
@@ -112,7 +110,40 @@ def _check_date(errors: list[str], field: str, value: dt.date, today: dt.date) -
         errors.append(f"{field} {value} is more than {MAX_REPORT_AGE.days} days ago")
 
 
-def validate_output(raw: str, today: dt.date, training_plan: str | None) -> LlmOutput:
+def _check_against_plan(errors: list[str], training: Training, plan: TrainingPlan) -> None:
+    """IDs that claim to come from the plan must really be in it."""
+    day = None
+    if training.plan_day is not None:
+        day = plan.day(training.plan_day)
+        if day is None:
+            names = ", ".join(repr(d.name) for d in plan.days)
+            errors.append(
+                f"training.plan_day {training.plan_day!r} is not a day of the plan ({names})"
+            )
+        else:
+            training.plan_day = day.name
+    planned = plan.planned_ids(day)
+    where_planned = f"in {day.name!r}" if day else "in the plan"
+
+    for ex in training.exercises:
+        where = f"exercise {ex.name!r}"
+        if ex.in_plan:
+            if ex.exercise_id is None:
+                errors.append(f"{where}: in_plan is true, so exercise_id must be the plan's ID")
+            elif ex.exercise_id not in planned:
+                errors.append(
+                    f"{where}: in_plan is true but {ex.exercise_id} isn't {where_planned}"
+                )
+        elif ex.exercise_id in planned and ex.replaces is None:
+            errors.append(f"{where}: {ex.exercise_id} is {where_planned}, so in_plan must be true")
+        if ex.replaces is not None and ex.replaces not in planned:
+            errors.append(f"{where}: replaces {ex.replaces}, which isn't {where_planned}")
+    for missed in training.missed_exercises:
+        if missed not in planned:
+            errors.append(f"missed exercise {missed} isn't {where_planned}")
+
+
+def validate_output(raw: str, today: dt.date, plan: TrainingPlan | None) -> LlmOutput:
     """Parse the model's JSON and check it; raises InvalidOutputError listing every problem."""
     try:
         output = LlmOutput.model_validate_json(raw)
@@ -161,19 +192,8 @@ def validate_output(raw: str, today: dt.date, training_plan: str | None) -> LlmO
                         f"{where}: {ex.replaces!r} was replaced, so it isn't a missed exercise"
                     )
 
-        # Names that claim to come from the plan must really be in it.
-        if training_plan:
-            if training.plan_day is not None and not _in_plan(training.plan_day, training_plan):
-                errors.append(f"training.plan_day {training.plan_day!r} is not in the plan")
-            for ex in training.exercises:
-                if ex.in_plan and not _in_plan(ex.name, training_plan):
-                    errors.append(f"exercise {ex.name!r} has in_plan true but is not in the plan")
-            for name in training.missed_exercises:
-                if not _in_plan(name, training_plan):
-                    errors.append(f"missed exercise {name!r} is not in the plan")
-            for ex in training.exercises:
-                if ex.replaces is not None and not _in_plan(ex.replaces, training_plan):
-                    errors.append(f"exercise {ex.name!r} replaces {ex.replaces!r}, not in the plan")
+        if plan:
+            _check_against_plan(errors, training, plan)
         else:
             if training.plan_day is not None:
                 errors.append("training.plan_day must be null: the trainee has no plan")
@@ -186,6 +206,18 @@ def validate_output(raw: str, today: dt.date, training_plan: str | None) -> LlmO
 
     if errors:
         raise InvalidOutputError(errors)
-    # A formatting slip the code can fix itself, without another LLM call.
+    # Slips the code can fix itself, without another LLM call.
     output.reply = _to_whatsapp_format(output.reply)
+    if output.training is not None:
+        _match_to_catalog(output.training, plan)
     return output
+
+
+def _match_to_catalog(training: Training, plan: TrainingPlan | None) -> None:
+    """Catalog IDs for exercises outside the plan. The model sees only the plan's exercises, so
+    the code matches the others by name and alias ("pompki" → push_up); an ID the model picked
+    from the schema's list is the fallback, and null stays null outside the catalog."""
+    from_plan = plan.allowed_ids() if plan else set()
+    for ex in training.exercises:
+        if ex.exercise_id not in from_plan:
+            ex.exercise_id = exercises.lookup(ex.name) or ex.exercise_id

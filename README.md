@@ -58,7 +58,7 @@ uv run alembic upgrade head
 uv run python scripts/add_trainee.py
 ```
 
-The bot answers only registered numbers; anyone else gets "Ten numer nie jest zarejestrowany – skontaktuj się ze swoim trenerem". With no options the script registers `WHATSAPP_TEST_RECIPIENT` with a test trainer and the example plan (`plans/example.txt`). Run it again to change something, e.g. `--plan my_plan.txt`, `--no-plan`, `--name "Ania"`; `--phone 48123456789` adds another number. Until the dashboard exists, this is how trainees and plans get into the database.
+The bot answers only registered numbers; anyone else gets "Ten numer nie jest zarejestrowany – skontaktuj się ze swoim trenerem". With no options the script registers `WHATSAPP_TEST_RECIPIENT` with a test trainer and the example plan (`plans/example.yaml`: days of exercise IDs from `src/wabot/exercises.yaml`, with the replacements the trainer allows; copy it to write your own). Run it again to change something, e.g. `--plan my_plan.yaml`, `--no-plan`, `--name "Ania"`; `--phone 48123456789` adds another number. Until the dashboard exists, this is how trainees and plans get into the database.
 
 ### 4. Run the bot
 

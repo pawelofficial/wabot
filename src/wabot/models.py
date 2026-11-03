@@ -76,8 +76,9 @@ class Trainee(Base):
     timezone: Mapped[str] = mapped_column(String(50), default=DEFAULT_TIMEZONE)
     # The day the trainee signed the paper consent, which the trainer keeps on file.
     consent_date: Mapped[dt.date]
-    # Free text written by the trainer; injected into the LLM's prompt.
-    training_plan: Mapped[str | None] = mapped_column(Text)
+    # Days of catalog exercises with their replacements, as JSON; read and checked through
+    # plans.of(trainee), injected into the LLM's prompt.
+    training_plan: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[dt.datetime] = mapped_column(UTCDateTime, default=utcnow)
 
     trainer: Mapped[Trainer] = relationship()
@@ -135,7 +136,7 @@ class TrainingCheckin(Base):
     # The day's name exactly as in the plan; null for training outside the plan.
     plan_day: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(10))  # done, partial or skipped
-    # Names (as in the plan) of the day's exercises the trainee said they didn't do.
+    # Catalog IDs of the day's plan exercises the trainee said they didn't do.
     missed_exercises: Mapped[list[str]] = mapped_column(JSON)
     notes: Mapped[str | None] = mapped_column(Text)
     # The trainee's message the bot answered when it saved this (the "yanek ..." one).
@@ -162,12 +163,13 @@ class TrainingExercise(Base):
         ForeignKey("training_checkins.id", ondelete="CASCADE"), index=True
     )
     # Catalog ID from exercises.yaml (progress is charted by it); null outside the catalog.
+    # Plan exercises and their replacements get it from the LLM, others from the name.
     exercise_id: Mapped[str | None] = mapped_column(String(50), index=True)
     name: Mapped[str] = mapped_column(Text)
     in_plan: Mapped[bool]
     sets: Mapped[int | None]
     reps: Mapped[str | None] = mapped_column(Text)  # "8" or "8,8,7,6"
     weight_kg: Mapped[float | None]
-    # The plan exercise this one was done instead of ("suwnica zamiast przysiadów").
-    replaces: Mapped[str | None] = mapped_column(Text)
+    # Catalog ID of the plan exercise this one was done instead of ("suwnica zamiast przysiadów").
+    replaces: Mapped[str | None] = mapped_column(String(50))
     comment: Mapped[str | None] = mapped_column(Text)

@@ -1,0 +1,96 @@
+# Example training plan, as a trainer would set it up. Every exercise is an ID from
+# src/wabot/exercises.yaml; the bot shows the trainee its Polish name. `replacements` are the
+# exercises the trainee may do instead (also catalog IDs). sets, reps, weight and note are
+# optional; reps and weight are free text ("6–8", "45 s", "2 x 16 kg", "lekko").
+# Register it with: uv run python scripts/add_trainee.py --plan plans/example.yaml
+
+notes: |
+  Cel: redukcja tkanki tłuszczowej przy utrzymaniu siły.
+  3 treningi siłowe w tygodniu: poniedziałek, środa, piątek. We wtorek i sobotę 8–10 tys. kroków
+  albo 30 min roweru. Niedziela wolna.
+
+  Uwagi trenera:
+  - Przed treningiem 10 min rozgrzewki.
+  - Ostatnia seria każdego ćwiczenia z zapasem 1–2 powtórzeń.
+  - Jak wypadnie trening, można go przesunąć na następny dzień – liczy się jako zrobiony.
+  - Ciężary są orientacyjne; jak wszystkie serie wchodzą łatwo, dokładamy 2,5 kg.
+
+days:
+  - name: Dzień A – poniedziałek (dół ciała)
+    exercises:
+      - id: back_squat
+        sets: 4
+        reps: 6–8
+        weight: ok. 60 kg
+        replacements: [leg_press, bulgarian_split_squat]
+      - id: romanian_deadlift
+        sets: 3
+        reps: 8–10
+        weight: 50 kg
+        replacements: [good_morning]
+      - id: walking_lunge
+        sets: 3
+        reps: 10 na nogę
+        weight: 2 x 10 kg
+        note: z hantlami
+        replacements: [bulgarian_split_squat]
+      - id: hip_thrust
+        sets: 3
+        reps: 10–12
+        weight: 70 kg
+        replacements: [glute_bridge]
+      - id: plank
+        sets: 3
+        reps: 45 s
+
+  - name: Dzień B – środa (góra ciała)
+    exercises:
+      - id: incline_dumbbell_press
+        sets: 4
+        reps: 8–10
+        weight: 2 x 16 kg
+        replacements: [bench_press, push_up]
+      - id: barbell_row
+        sets: 4
+        reps: 8–10
+        weight: 40 kg
+        replacements: [dumbbell_row]
+      - id: seated_dumbbell_press
+        sets: 3
+        reps: 10
+        weight: 2 x 10 kg
+      - id: lat_pulldown
+        sets: 3
+        reps: 10–12
+        weight: 45 kg
+        replacements: [pull_up]
+      - id: face_pull
+        sets: 3
+        reps: 15
+        weight: lekko
+
+  - name: Dzień C – piątek (całe ciało)
+    exercises:
+      - id: deadlift
+        sets: 3
+        reps: 5
+        weight: 80 kg
+        replacements: [romanian_deadlift]
+      - id: push_up
+        sets: 3
+        reps: max
+        replacements: [incline_dumbbell_press]
+      - id: bulgarian_split_squat
+        sets: 3
+        reps: 8 na nogę
+        weight: bez obciążenia albo 2 x 8 kg
+        replacements: [walking_lunge]
+      - id: pull_up
+        sets: 3
+        reps: 6–8
+        note: z gumą
+        replacements: [lat_pulldown]
+      - id: farmers_walk
+        sets: 3
+        reps: 30 m
+        weight: 2 x 20 kg

@@ -1,11 +1,13 @@
-# Exercise catalog: fixed IDs the LLM maps every reported and planned exercise to, so the same
-# exercise is stored under one ID however the trainee or trainer names it. IDs are permanent
+# Exercise catalog: fixed IDs every exercise is stored under, so the same exercise keeps one ID
+# however the trainee or trainer names it. Training plans (plans/*.yaml) are built from these IDs,
+# and the LLM sees the name and aliases of the exercises in the trainee's plan. IDs are permanent
 # once data uses them – add new entries instead of renaming. `aliases` are other names people
-# use; the LLM also matches obvious variants. Loaded once at startup by wabot/exercises.py.
+# use (the code also matches them for exercises outside the plan). Loaded once at startup by
+# wabot/exercises.py.
 
 - id: back_squat
   name: Przysiad ze sztangą
-  aliases: [przysiad, przysiady, squat, back squat]
+  aliases: [przysiad, przysiady, siady, squat, back squat]
   group: nogi
 
 - id: leg_press
@@ -26,6 +28,11 @@
 - id: romanian_deadlift
   name: Martwy ciąg rumuński
   aliases: [rumuński martwy ciąg, rdl, martwy na prostych nogach]
+  group: nogi
+
+- id: good_morning
+  name: Dzień dobry ze sztangą
+  aliases: [dzień dobry, good morning]
   group: nogi
 
 - id: deadlift
@@ -71,6 +78,11 @@
 - id: barbell_row
   name: Wiosłowanie sztangą w opadzie
   aliases: [wiosło, wiosłowanie, wiosłowanie sztangą, barbell row]
+  group: plecy
+
+- id: dumbbell_row
+  name: Wiosłowanie hantlem
+  aliases: [wiosło hantlem, wiosłowanie jednorącz, wiosłowanie hantlem w opadzie, dumbbell row]
   group: plecy
 
 - id: lat_pulldown

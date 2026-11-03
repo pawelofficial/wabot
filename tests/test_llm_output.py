@@ -4,17 +4,34 @@ from types import SimpleNamespace
 
 import pytest
 
-from wabot import assistant, exercises, llm_output
+from wabot import assistant, exercises, llm_output, plans
 from wabot.config import Settings
 from wabot.llm_output import InvalidOutputError, validate_output
 from wabot.models import DEFAULT_TIMEZONE, Trainee, utcnow
+from wabot.plans import TrainingPlan
 
 TODAY = dt.date(2026, 11, 3)
-PLAN = """Dzień A – poniedziałek (dół ciała)
-1. Przysiad ze sztangą – 4 x 6–8, ok. 60 kg
-2. Hip thrust – 3 x 10–12, 70 kg
-"""
-TRAINEE = Trainee(training_plan=PLAN, timezone=DEFAULT_TIMEZONE)
+PLAN = TrainingPlan.model_validate(
+    {
+        "days": [
+            {
+                "name": "Dzień A – poniedziałek (dół ciała)",
+                "exercises": [
+                    {
+                        "id": "back_squat",
+                        "sets": 4,
+                        "reps": "6–8",
+                        "weight": "ok. 60 kg",
+                        "replacements": ["leg_press"],
+                    },
+                    {"id": "hip_thrust", "sets": 3, "reps": "10–12", "weight": "70 kg"},
+                ],
+            },
+            {"name": "Dzień B – środa", "exercises": [{"id": "bench_press"}]},
+        ]
+    }
+)
+TRAINEE = Trainee(training_plan=plans.to_db(PLAN), timezone=DEFAULT_TIMEZONE)
 
 
 def output(**overrides) -> dict:
@@ -39,13 +56,27 @@ def training(**overrides) -> dict:
                 "comment": None,
             }
         ],
-        "missed_exercises": ["Hip thrust"],
+        "missed_exercises": ["hip_thrust"],
         "notes": None,
     }
     return {**data, **overrides}
 
 
-def errors_of(data: dict, plan: str | None = PLAN) -> list[str]:
+def exercise(exercise_id: str | None, **fields) -> dict:
+    data = {
+        "exercise_id": exercise_id,
+        "name": "Ćwiczenie",
+        "in_plan": True,
+        "sets": None,
+        "reps": None,
+        "weight_kg": None,
+        "replaces": None,
+        "comment": None,
+    }
+    return {**data, **fields}
+
+
+def errors_of(data: dict, plan: TrainingPlan | None = PLAN) -> list[str]:
     with pytest.raises(InvalidOutputError) as e:
         validate_output(json.dumps(data), TODAY, plan)
     return e.value.errors
@@ -99,27 +130,30 @@ def test_wrong_structure_is_rejected(data, error):
         (output(weight={"kg": 82, "date": "2026-09-01"}), "more than 31 days ago"),
         (output(training=training(status="skipped")), "skipped but exercises are listed"),
         (output(training=training(exercises=[])), "no exercises are listed"),
-        (output(training=training(plan_day="Dzień Z")), "plan_day 'Dzień Z' is not in the plan"),
         (
-            output(
-                training=training(
-                    exercises=[
-                        {
-                            "exercise_id": "bench_press",
-                            "name": "Wyciskanie",
-                            "in_plan": True,
-                            "sets": 30,
-                            "reps": None,
-                            "weight_kg": None,
-                            "replaces": None,
-                            "comment": None,
-                        }
-                    ]
-                )
-            ),
-            "'Wyciskanie' has in_plan true but is not in the plan",
+            output(training=training(plan_day="Dzień Z")),
+            "plan_day 'Dzień Z' is not a day of the plan",
         ),
-        (output(training=training(missed_exercises=["Pompki"])), "'Pompki' is not in the plan"),
+        (
+            output(training=training(exercises=[exercise("bench_press", sets=30)])),
+            "sets 30 is outside",
+        ),
+        (
+            output(training=training(exercises=[exercise("bench_press")])),
+            "in_plan is true but bench_press isn't in 'Dzień A – poniedziałek (dół ciała)'",
+        ),
+        (
+            output(training=training(exercises=[exercise(None)])),
+            "in_plan is true, so exercise_id must be the plan's ID",
+        ),
+        (
+            output(training=training(exercises=[exercise("back_squat", in_plan=False)])),
+            "so in_plan must be true",
+        ),
+        (
+            output(training=training(missed_exercises=["bench_press"])),
+            "missed exercise bench_press isn't in 'Dzień A",
+        ),
     ],
 )
 def test_implausible_values_are_rejected(data, error):
@@ -130,6 +164,19 @@ def test_implausible_values_are_rejected(data, error):
 def test_all_problems_are_reported_at_once():
     data = output(reply="", weight={"kg": 900, "date": "2026-11-03"})
     assert len(errors_of(data)) == 2
+
+
+def test_plan_day_is_matched_ignoring_case_and_spacing():
+    data = output(training=training(plan_day="dzień a –  poniedziałek (dół ciała)"))
+    result = validate_output(json.dumps(data), TODAY, PLAN)
+    assert result.training.plan_day == "Dzień A – poniedziałek (dół ciała)"
+
+
+def test_without_a_day_any_plan_exercise_is_allowed():
+    data = output(
+        training=training(plan_day=None, exercises=[exercise("bench_press")], missed_exercises=[])
+    )
+    assert validate_output(json.dumps(data), TODAY, PLAN).training.plan_day is None
 
 
 def test_without_a_plan_nothing_may_claim_to_be_in_it():
@@ -215,7 +262,7 @@ def substitution(**overrides) -> dict:
         "sets": None,
         "reps": None,
         "weight_kg": None,
-        "replaces": "Przysiad ze sztangą",
+        "replaces": "back_squat",
         "comment": "Zamiast przysiadów.",
     }
     hip_thrust = {**suwnica, "exercise_id": "hip_thrust", "name": "Hip thrust", "in_plan": True}
@@ -228,14 +275,22 @@ def substitution(**overrides) -> dict:
 def test_substituted_exercise_is_valid():
     result = validate_output(json.dumps(output(training=substitution())), TODAY, PLAN)
     suwnica = result.training.exercises[0]
-    assert (suwnica.name, suwnica.replaces) == ("Suwnica na nogi", "Przysiad ze sztangą")
+    assert (suwnica.exercise_id, suwnica.replaces) == ("leg_press", "back_squat")
+
+
+def test_replacement_the_trainer_didnt_list_is_valid():
+    data = substitution()
+    data["exercises"][0].update(exercise_id=None, name="Przysiad bułgarski")
+    result = validate_output(json.dumps(output(training=data)), TODAY, PLAN)
+    # Not among the plan's replacements, so the model leaves the ID out; the catalog has it.
+    assert result.training.exercises[0].exercise_id == "bulgarian_split_squat"
 
 
 @pytest.mark.parametrize(
     ("change", "error"),
     [
-        ({"replaces": "Wyciskanie leżąc"}, "replaces 'Wyciskanie leżąc', not in the plan"),
-        ({"in_plan": True}, "in_plan must be false"),
+        ({"replaces": "bench_press"}, "replaces bench_press, which isn't in 'Dzień A"),
+        ({"in_plan": True}, "in_plan is true but leg_press isn't in"),
     ],
 )
 def test_bad_substitution_is_rejected(change, error):
@@ -246,7 +301,7 @@ def test_bad_substitution_is_rejected(change, error):
 
 
 def test_replaced_exercise_is_not_missed():
-    data = substitution(missed_exercises=["Przysiad ze sztangą"])
+    data = substitution(missed_exercises=["back_squat"])
     errors = errors_of(output(training=data))
     assert any("isn't a missed exercise" in msg for msg in errors), errors
 
@@ -264,6 +319,30 @@ def test_exercise_outside_the_catalog_has_no_id():
     data["missed_exercises"] = []
     result = validate_output(json.dumps(output(training=data)), TODAY, PLAN)
     assert result.training.exercises[0].exercise_id is None
+
+
+@pytest.mark.parametrize("plan", [PLAN, None])
+def test_exercise_outside_the_plan_gets_its_id_from_the_catalog(plan):
+    data = training(plan_day=None, status="done", missed_exercises=[])
+    data["exercises"][0].update(exercise_id=None, name="pompki", in_plan=False)
+    result = validate_output(json.dumps(output(training=data)), TODAY, plan)
+    assert result.training.exercises[0].exercise_id == "push_up"
+
+
+@pytest.mark.parametrize(
+    ("exercise_id", "name", "expected"),
+    [
+        # The model's ID for an exercise outside the plan is kept when the name isn't known...
+        ("running", "Bieg 5 km", "running"),
+        # ...and the catalog's match by name wins over it.
+        ("cycling", "Bieganie", "running"),
+    ],
+)
+def test_id_outside_the_plan_is_checked_against_the_name(exercise_id, name, expected):
+    data = training(plan_day=None, status="done", missed_exercises=[])
+    data["exercises"][0].update(exercise_id=exercise_id, name=name, in_plan=False)
+    result = validate_output(json.dumps(output(training=data)), TODAY, PLAN)
+    assert result.training.exercises[0].exercise_id == expected
 
 
 def test_schema_lists_the_catalog_ids():

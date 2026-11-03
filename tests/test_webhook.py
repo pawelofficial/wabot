@@ -6,16 +6,23 @@ import json
 import pytest
 from sqlalchemy import select
 
-from wabot import assistant, entries, main, trainees, whatsapp
+from wabot import assistant, entries, main, plans, trainees, whatsapp
 from wabot.db import SessionLocal
 from wabot.llm_output import LlmOutput, Weight
 from wabot.models import Message, Trainee, WeightEntry, utcnow
 
 PHONE = "48111222333"
-PLAN = "Dzień A – przysiad ze sztangą 4 x 6"
 
 
-def add_trainee(phone: str = PHONE, plan: str | None = PLAN, trainer: str = "Trener") -> Trainee:
+def plan_with_day(name: str) -> dict:
+    """A one-day plan as stored in trainees.training_plan."""
+    return {"days": [{"name": name, "exercises": [{"id": "back_squat", "sets": 4, "reps": "6"}]}]}
+
+
+PLAN = plan_with_day("Dzień A")
+
+
+def add_trainee(phone: str = PHONE, plan: dict | None = PLAN, trainer: str = "Trener") -> Trainee:
     with SessionLocal() as session:
         trainee = Trainee(
             trainer=trainees.trainer_named(session, trainer),
@@ -219,17 +226,17 @@ def test_unregistered_number_gets_a_fixed_reply_and_its_text_is_not_kept(client,
 
 
 def test_the_trainees_own_plan_goes_to_the_llm(client, sent, monkeypatch):
-    add_trainee(plan="Plan Ani")
-    add_trainee(phone="48999888777", plan="Plan Basi")
-    plans = []
+    add_trainee(plan=plan_with_day("Plan Ani"))
+    add_trainee(phone="48999888777", plan=plan_with_day("Plan Basi"))
+    days = []
 
     def fake_generate_reply(settings, trainee, history, now):
-        plans.append(trainee.training_plan)
+        days.append(plans.of(trainee).days[0].name)
         return LlmOutput(reply="Ok.", weight=None, training=None)
 
     monkeypatch.setattr(assistant, "generate_reply", fake_generate_reply)
     post_signed(client, text_payload("wamid.1", "yanek, co mam dziś?", phone="48999888777"))
-    assert plans == ["Plan Basi"]
+    assert days == ["Plan Basi"]
 
 
 def test_reported_weight_is_saved(client, sent, trainee, llm_returns):

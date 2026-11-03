@@ -115,15 +115,15 @@ def test_training_is_saved_with_its_exercises(trainee, report):
         msg,
         training=training(
             exercise("Przysiad ze sztangą", "back_squat", sets=4, reps="8", weight_kg=60),
-            exercise("suwnica", "leg_press", in_plan=False, replaces="Hip thrust"),
+            exercise("suwnica", "leg_press", in_plan=False, replaces="hip_thrust"),
             status="partial",
-            missed=["Plank"],
+            missed=["plank"],
             notes="Bolało kolano.",
         ),
     )
     [checkin] = checkins()
     assert (checkin.date, checkin.plan_day, checkin.status) == (MONDAY, "Dzień A", "partial")
-    assert (checkin.missed_exercises, checkin.notes) == (["Plank"], "Bolało kolano.")
+    assert (checkin.missed_exercises, checkin.notes) == (["plank"], "Bolało kolano.")
     assert (checkin.message_id, checkin.trainer_id) == (msg.id, trainee.trainer_id)
     squat, leg_press = checkin.exercises
     assert (squat.exercise_id, squat.sets, squat.reps, squat.weight_kg) == (
@@ -132,14 +132,14 @@ def test_training_is_saved_with_its_exercises(trainee, report):
         "8",
         60,
     )
-    assert (leg_press.in_plan, leg_press.replaces) == (False, "Hip thrust")
+    assert (leg_press.in_plan, leg_press.replaces) == (False, "hip_thrust")
 
 
 def test_a_corrected_training_replaces_the_whole_session(trainee, report):
     first, correction = report(), report("yanek sorki, przysiad był na 65 kg")
     squat = exercise("Przysiad ze sztangą", "back_squat", sets=4, reps="8", weight_kg=60)
     hip_thrust = exercise("Hip thrust", "hip_thrust")
-    save(trainee, first, training=training(squat, hip_thrust, status="partial", missed=["Plank"]))
+    save(trainee, first, training=training(squat, hip_thrust, status="partial", missed=["plank"]))
     # The LLM returns the whole session again, with the fix.
     squat_65 = squat.model_copy(update={"weight_kg": 65})
     save(trainee, correction, training=training(squat_65, hip_thrust))
