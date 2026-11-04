@@ -3,6 +3,7 @@
 
 name: Ola
 trainer: Trenerka Ewa
+trainer_email: ewa.trenerka@example.com
 phone: "48000000003"
 plan: plans/beginner_fbw.yaml
 

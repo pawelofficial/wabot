@@ -8,6 +8,7 @@ Run from the project root, after `uv run alembic upgrade head`:
     uv run python scripts/add_trainee.py
     uv run python scripts/add_trainee.py --name "Ania" --plan plans/example.yaml
     uv run python scripts/add_trainee.py --phone 48123456789 --trainer "Trener Tomek"
+    uv run python scripts/add_trainee.py --trainer-email you@gmail.com   # dashboard sign-in
     uv run python scripts/add_trainee.py --no-plan
 """
 
@@ -41,6 +42,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--name", help=f"trainee's name (new trainee: {DEFAULT_NAME!r})")
     parser.add_argument("--trainer", help=f"trainer's name, created if new ({DEFAULT_TRAINER!r})")
+    parser.add_argument(
+        "--trainer-email", help="the Google account the trainer signs in to the dashboard with"
+    )
     plan = parser.add_mutually_exclusive_group()
     plan.add_argument("--plan", type=Path, help=f"training plan YAML file, see {DEFAULT_PLAN}")
     plan.add_argument("--no-plan", action="store_true", help="remove the training plan")
@@ -59,6 +63,12 @@ def main(argv: list[str] | None = None) -> None:
         phone = trainees.normalize_phone(phone)
     except ValueError as e:
         sys.exit(str(e))
+    trainer_email = None
+    if args.trainer_email:
+        try:
+            trainer_email = trainees.normalize_email(args.trainer_email)
+        except ValueError as e:
+            sys.exit(str(e))
     if args.timezone:
         try:
             ZoneInfo(args.timezone)
@@ -99,6 +109,11 @@ def main(argv: list[str] | None = None) -> None:
             trainee.consent_date = args.consent_date
         if args.timezone:
             trainee.timezone = args.timezone
+        if trainer_email:
+            other = trainees.trainer_by_email(session, trainer_email)
+            if other is not None and other is not trainee.trainer:
+                sys.exit(f"{trainer_email} is already the email of {other.name}")
+            trainee.trainer.email = trainer_email
         session.commit()
 
         saved = plans.of(trainee)
@@ -109,7 +124,8 @@ def main(argv: list[str] | None = None) -> None:
         )
         print(
             f"{'Registered' if created else 'Updated'} {trainee.name} ({trainee.phone}), "
-            f"trainer {trainee.trainer.name}, plan: {plan_summary}, "
+            f"trainer {trainee.trainer.name} ({trainee.trainer.email or 'no email'}), "
+            f"plan: {plan_summary}, "
             f"consent {trainee.consent_date}, {trainee.timezone}"
         )
 

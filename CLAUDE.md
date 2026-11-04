@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Milestone 0 (developer setup) is done and so is milestone 1 (echo bot); milestone 2 (submissions) is in progress – trainees, plans, weight and training are in the database, diet isn't yet. Development is local until the production milestone. Settings and secrets (Meta access token, app secret, webhook verify token) are in `.env` (gitignored; never print or commit it).
+Milestone 0 (developer setup) is done and so is milestone 1 (echo bot); milestone 2 (submissions: trainees, plans, weight and training in the database) is done; milestone 3 (trainer dashboard) is in progress, and milestone 4 (conversation: corrections, clarifications, diet) comes after it. Development is local until the production milestone. Settings and secrets (Meta access token, app secret, webhook verify token) are in `.env` (gitignored; never print or commit it).
 
 ## Commands
 
@@ -22,6 +22,8 @@ uv run python scripts/add_trainee.py     # register WHATSAPP_TEST_RECIPIENT as a
 uv run python scripts/send_test.py       # send a test template message
 uv run python scripts/send_test_custom_first_message.py [--dry-run]   # bot-started message, composed by the app
 uv run python scripts/simulate_month.py [--only kasia]  # scenarios/*.yaml through the real model into simulated_month.db (not wabot.db)
+uv run python scripts/simulate_month.py --canned   # the same with the correct answers from the scenarios, no OpenAI
+bash run_dashboard.sh                    # dashboard at /dashboard on simulated_month.db (--canned if missing), dev login
 ```
 
 ## Code layout
@@ -30,6 +32,7 @@ uv run python scripts/simulate_month.py [--only kasia]  # scenarios/*.yaml throu
 - `src/wabot/conversation.py` – flow shared by the webhook and scripts: the "yanek" name trigger, the trainee's chat history, `asked_again()` (skip a message the trainee followed up on), 24 h window check, composing bot-started messages, send-and-store
 - `src/wabot/trainees.py` – `find_by_phone()`, `normalize_phone()`, `trainer_named()`
 - `src/wabot/entries.py` – `save()`: the extracted weight and training into `weight_entries` / `training_checkins`; every report is a new row and the newest per trainee per day is current (`DAILY_UPDATES_ONLY=True`: one row per day, a newer report updates it)
+- `src/wabot/dashboard/` – the trainers' dashboard (Jinja templates, plain CSS/JS, no build step): `routes.py` pages under `/dashboard`, `auth.py` signed session cookie plus `current_trainer` / `trainee_of_trainer` (404 for another trainer's trainee; every page uses them), `queries.py` the reads (`current_per_day()`: the newest row per day), `templates/base.html` the sidebar with the trainee dropdown, `static/weight_chart.js` the weight chart (SVG, no chart library). Sign-in: Google (`GOOGLE_CLIENT_ID`; the ID token's verified email must be a `trainers.email`), or `DASHBOARD_DEV_LOGIN=True`, which lists trainers to sign in as (local only)
 - `src/wabot/utils.py` – `hardcoded_first_message()`, used instead of the LLM when `HARDCODED_FIRST_MESSAGE=True`
 - `src/wabot/whatsapp.py` – Cloud API: signature check, webhook parsing (incl. failed delivery statuses), sending
 - `src/wabot/models.py` – SQLAlchemy models (`Trainer`, `Trainee`, `Message`, `WeightEntry`, `TrainingCheckin`, `TrainingExercise`); use `UTCDateTime` for every timestamp
@@ -41,8 +44,10 @@ uv run python scripts/simulate_month.py [--only kasia]  # scenarios/*.yaml throu
 - `src/wabot/plans.py` – training plans: pydantic models (days of catalog exercise IDs with sets/reps/weight and the trainer's allowed replacements, plus notes), `load()` a YAML file, `of(trainee)` from the db (JSON), `prompt_text()` for the LLM
 - `plans/example.yaml` – example training plan; `scripts/add_trainee.py` gives it to new trainees. `upper_lower.yaml` (fixed weekdays) and `beginner_fbw.yaml` (alternating workouts) are two more
 - `scenarios/*.yaml` + `src/wabot/simulation.py` – a month of reports per simulated trainee (messages, the correct model answer, what must be saved), replayed through `main.reply()` at simulated times by `tests/test_month_scenario.py` (canned answers) and `scripts/simulate_month.py` (real model)
-- `scripts/add_trainee.py` – registers or updates a trainee and their trainer until the dashboard exists
+- `scripts/add_trainee.py` – registers or updates a trainee and their trainer (`--trainer-email` for dashboard sign-in) until the dashboard does it
 - `alembic/` – migrations; `UTCDateTime` is rendered as plain `DateTime(timezone=True)`
+
+The dashboard is developed on the simulation's data (`simulated_month.db`, built by the same migrations), so the simulated trainers and trainees must have every field real ones have: when a change adds a column or a field the dashboard needs, give it a value in `scenarios/*.yaml` / `simulation.register()` in the same change (`test_simulated_trainers_and_trainees_have_every_field_filled` fails otherwise).
 
 `docs/CODE_EXPLANATION.md` walks through the runtime flows (which function calls which, where data ends up). When a change adds, removes or reorders a step in one of those flows, update it in the same change.
 

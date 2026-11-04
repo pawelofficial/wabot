@@ -1,89 +1,29 @@
 """Three trainees' months of reports (scenarios/*.yaml, three plans, two trainers), replayed
 through the real reply flow in the order they're sent: main.reply() → the history →
-assistant._complete() (a fake OpenAI client returns the answer the scenario gives) →
+assistant._complete() (simulation.canned_llm(): the answer the scenario gives) →
 validate_output() (plan checks, missed exercises, done/partial) → entries.save().
 
 After every message it checks what was saved against the scenario. scripts/simulate_month.py
 sends the same messages to the real model.
 """
 
-import json
 from collections import Counter
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
-from wabot import assistant, exercises, main, simulation
+from wabot import main, simulation
 from wabot.config import Settings
 from wabot.db import SessionLocal
-from wabot.models import TrainingCheckin, WeightEntry
-from wabot.plans import TrainingPlan
+from wabot.models import Trainee, Trainer, TrainingCheckin, WeightEntry
 
 SCENARIOS = simulation.load_all()
 
 
-def plan_day(plan: TrainingPlan, start: str):
-    [day] = [d for d in plan.days if d.name.startswith(start)]
-    return day
-
-
-def answer(scenario: simulation.Scenario, report: dict) -> dict:
-    """The JSON a correct model returns for the report (format in scenarios/kasia.yaml)."""
-    today = scenario.time_of(report).astimezone(simulation.ZoneInfo(scenario.timezone)).date()
-    out = {"reply": f"Zapisałem: {report['text']}", "weight": None, "training": None}
-
-    if (weight := report.get("weight")) is not None:
-        weight = weight if isinstance(weight, dict) else {"kg": weight}
-        out["weight"] = {"kg": weight["kg"], "date": str(weight.get("date", today))}
-
-    if (training := report.get("training")) is not None:
-        day = plan_day(scenario.plan, training["day"]) if "day" in training else None
-        items = training["exercises"]
-        if items == "all":
-            items = [e.id for e in day.exercises]
-        planned = {e.id for e in day.exercises} if day else set()
-        exercise_list = []
-        for item in items:
-            item = item if isinstance(item, dict) else {"id": item}
-            exercise_id = item.get("id")
-            exercise_list.append(
-                {
-                    "exercise_id": exercise_id,
-                    "name": item.get("name") or exercises.BY_ID[exercise_id].name,
-                    "in_plan": exercise_id in planned and "replaces" not in item,
-                    "sets": item.get("sets"),
-                    "reps": item.get("reps"),
-                    "weight_kg": item.get("kg"),
-                    "replaces": item.get("replaces"),
-                    "comment": None,
-                }
-            )
-        out["training"] = {
-            "date": str(training.get("date", today)),
-            "plan_day": day.name if day else None,
-            "status": training.get("status", "done"),
-            "exercises": exercise_list,
-            "notes": training.get("notes"),
-        }
-    return out
-
-
 @pytest.fixture
-def fake_llm(monkeypatch):
-    """OpenAI replaced by a client that returns the answers queued in `answers`."""
-    llm = SimpleNamespace(answers=[], requests=[])
-
-    class FakeOpenAI:
-        def __init__(self, api_key):
-            self.responses = self
-
-        def create(self, **request):
-            llm.requests.append(request)
-            return SimpleNamespace(output=[], output_text=json.dumps(llm.answers.pop(0)))
-
-    monkeypatch.setattr(assistant.openai, "OpenAI", FakeOpenAI)
-    return llm
+def fake_llm():
+    with simulation.canned_llm() as llm:
+        yield llm
 
 
 def saved_for(model, message_id: int):
@@ -102,6 +42,18 @@ def test_there_are_three_trainees_on_three_plans():
         assert len(scenario.reports) == 15, scenario.key
 
 
+def test_simulated_trainers_and_trainees_have_every_field_filled():
+    """The simulated people must look like real ones, so the dashboard works on the simulation's
+    data: a new column (like trainers.email for signing in) needs a value in scenarios/ too."""
+    for scenario in SCENARIOS:
+        simulation.register(scenario)
+    with SessionLocal() as session:
+        for model in (Trainer, Trainee):
+            for row in session.scalars(select(model)):
+                empty = [c.name for c in model.__table__.columns if getattr(row, c.name) is None]
+                assert empty == [], f"{model.__name__} {row.name}: {empty} not set by the scenarios"
+
+
 @pytest.mark.parametrize("daily_updates_only", [False, True])
 def test_a_month_of_reports_from_three_trainees(fake_llm, monkeypatch, daily_updates_only):
     settings = Settings(daily_updates_only=daily_updates_only)
@@ -111,7 +63,7 @@ def test_a_month_of_reports_from_three_trainees(fake_llm, monkeypatch, daily_upd
 
     with simulation.Replay() as replay:
         for at, scenario, report in simulation.timeline(SCENARIOS):
-            expected = answer(scenario, report)
+            expected = simulation.correct_answer(scenario, report)
             fake_llm.answers.append(expected)
             message_id = replay.send(registered[scenario.key], report["text"], at)
             where = f"{scenario.key} {report['at']}"

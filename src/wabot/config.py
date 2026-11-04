@@ -42,6 +42,16 @@ class Settings(DatabaseSettings):
     # Your own number (digits only); where the scripts send test messages.
     whatsapp_test_recipient: str | None = None
 
+    # Signs the dashboard's session cookie; any long random string, kept secret. Without it
+    # nobody can sign in, except with the dev login (which then uses a fixed key).
+    dashboard_session_secret: str = ""
+    # OAuth client ID (Google Cloud console → APIs & Services → Credentials, type "Web
+    # application"); shows "Sign in with Google" on the login page. A trainer signs in with the
+    # Google account whose email is trainers.email.
+    google_client_id: str = ""
+    # Local development only: the login page lists the trainers to sign in as, no Google.
+    dashboard_dev_login: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

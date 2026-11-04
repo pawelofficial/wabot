@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Podopieczni{% endblock %}
+{% block heading %}Podopieczni{% endblock %}
+{% block content %}
+{% if trainees %}
+<table class="table">
+  <thead><tr><th>Imię</th><th>Telefon</th></tr></thead>
+  <tbody>
+    {% for t in trainees %}
+    <tr>
+      <td><a href="/dashboard/trainees/{{ t.id }}/trainings">{{ t.name }}</a></td>
+      <td>+{{ t.phone }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">Nie masz jeszcze podopiecznych.</p>
+{% endif %}
+{% endblock %}

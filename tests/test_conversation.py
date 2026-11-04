@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from wabot import assistant, conversation, exercises, main, plans, utils
+from wabot import assistant, conversation, exercises, main, plans, trainees, utils
 from wabot.config import Settings
 from wabot.db import SessionLocal
 from wabot.models import DEFAULT_TIMEZONE, Message, Trainee, utcnow
@@ -360,4 +360,21 @@ def test_add_trainee_registers_and_then_updates(monkeypatch, capsys):
             None,
             "Tomek",
         )
-    assert "Updated Ania (48111222333), trainer Tomek, plan: none" in capsys.readouterr().out
+    assert "Updated Ania (48111222333), trainer Tomek (no email), plan: none" in (
+        capsys.readouterr().out
+    )
+
+
+def test_add_trainee_sets_the_trainers_email(monkeypatch):
+    run_add_trainee(monkeypatch, "--phone", PHONE, "--trainer-email", " Marek@Gmail.com ")
+    with SessionLocal() as session:
+        trainer = session.scalar(select(Trainee)).trainer
+        assert trainer.email == "marek@gmail.com"
+        assert trainees.trainer_by_email(session, "MAREK@gmail.com") == trainer
+
+    # Another trainer can't take the same email.
+    run_add_trainee(monkeypatch, "--phone", "48999888777", "--trainer", "Ewa")
+    with pytest.raises(SystemExit, match="already the email of"):
+        run_add_trainee(monkeypatch, "--phone", "48999888777", "--trainer-email", "marek@gmail.com")
+    with pytest.raises(SystemExit, match="not an email"):
+        run_add_trainee(monkeypatch, "--phone", PHONE, "--trainer-email", "marek")

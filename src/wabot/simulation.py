@@ -1,6 +1,7 @@
 """Replaying trainees' months of reports (scenarios/*.yaml) through the bot's real reply flow
 at simulated times. Used by tests/test_month_scenario.py (with canned LLM answers) and
-scripts/simulate_month.py (with the real model); the app itself doesn't use it.
+scripts/simulate_month.py (the real model, or the canned answers with --canned, to fill a
+database for the dashboard); the app itself doesn't use it.
 
 Each message is stored as the webhook stores it, with the simulated time as created_at, and
 answered by main.reply(), which reads the history, calls the LLM, validates and saves. While
@@ -10,14 +11,16 @@ at that time instead of being sent to WhatsApp.
 
 import contextlib
 import datetime as dt
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 from zoneinfo import ZoneInfo
 
 import yaml
 
-from wabot import conversation, main, plans, trainees
+from wabot import assistant, conversation, exercises, main, plans, trainees
 from wabot.db import SessionLocal
 from wabot.models import Message, Trainee
 from wabot.plans import TrainingPlan
@@ -32,6 +35,7 @@ class Scenario:
     key: str  # the file name without .yaml
     name: str
     trainer: str
+    trainer_email: str
     phone: str
     plan_path: Path
     reports: list[dict]
@@ -53,6 +57,7 @@ def load(path: Path) -> Scenario:
         key=path.stem,
         name=data["name"],
         trainer=data["trainer"],
+        trainer_email=data["trainer_email"],
         phone=str(data["phone"]),
         plan_path=Path(data["plan"]),
         reports=data["reports"],
@@ -72,8 +77,13 @@ def timeline(scenarios: list[Scenario]) -> list[tuple[dt.datetime, Scenario, dic
 def register(scenario: Scenario) -> Trainee:
     """Add the scenario's trainee (and trainer) with their plan."""
     with SessionLocal() as session:
+        trainer = trainees.trainer_named(session, scenario.trainer)
+        email = trainees.normalize_email(scenario.trainer_email)
+        if trainer.email not in (None, email):
+            raise ValueError(f"{scenario.key}: {trainer.name} already has email {trainer.email}")
+        trainer.email = email
         trainee = Trainee(
-            trainer=trainees.trainer_named(session, scenario.trainer),
+            trainer=trainer,
             phone=scenario.phone,
             name=scenario.name,
             timezone=scenario.timezone,
@@ -83,6 +93,70 @@ def register(scenario: Scenario) -> Trainee:
         session.add(trainee)
         session.commit()
         return trainee
+
+
+def _plan_day(plan: TrainingPlan, start: str):
+    [day] = [d for d in plan.days if d.name.startswith(start)]
+    return day
+
+
+def correct_answer(scenario: Scenario, report: dict) -> dict:
+    """The JSON a correct model returns for the report (format in scenarios/kasia.yaml)."""
+    today = scenario.time_of(report).astimezone(ZoneInfo(scenario.timezone)).date()
+    out = {"reply": f"Zapisałem: {report['text']}", "weight": None, "training": None}
+
+    if (weight := report.get("weight")) is not None:
+        weight = weight if isinstance(weight, dict) else {"kg": weight}
+        out["weight"] = {"kg": weight["kg"], "date": str(weight.get("date", today))}
+
+    if (training := report.get("training")) is not None:
+        day = _plan_day(scenario.plan, training["day"]) if "day" in training else None
+        items = training["exercises"]
+        if items == "all":
+            items = [e.id for e in day.exercises]
+        planned = {e.id for e in day.exercises} if day else set()
+        exercise_list = []
+        for item in items:
+            item = item if isinstance(item, dict) else {"id": item}
+            exercise_id = item.get("id")
+            exercise_list.append(
+                {
+                    "exercise_id": exercise_id,
+                    "name": item.get("name") or exercises.BY_ID[exercise_id].name,
+                    "in_plan": exercise_id in planned and "replaces" not in item,
+                    "sets": item.get("sets"),
+                    "reps": item.get("reps"),
+                    "weight_kg": item.get("kg"),
+                    "replaces": item.get("replaces"),
+                    "comment": None,
+                }
+            )
+        out["training"] = {
+            "date": str(training.get("date", today)),
+            "plan_day": day.name if day else None,
+            "status": training.get("status", "done"),
+            "exercises": exercise_list,
+            "notes": training.get("notes"),
+        }
+    return out
+
+
+@contextlib.contextmanager
+def canned_llm():
+    """OpenAI replaced by a client that returns the answers queued in `.answers`, in order;
+    `.requests` collects what was sent to it."""
+    llm = SimpleNamespace(answers=[], requests=[])
+
+    class CannedOpenAI:
+        def __init__(self, api_key):
+            self.responses = self
+
+        def create(self, **request):
+            llm.requests.append(request)
+            return SimpleNamespace(output=[], output_text=json.dumps(llm.answers.pop(0)))
+
+    with mock.patch.object(assistant.openai, "OpenAI", CannedOpenAI):
+        yield llm
 
 
 class Replay:

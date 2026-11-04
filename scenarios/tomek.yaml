@@ -2,6 +2,7 @@
 
 name: Tomek
 trainer: Trener Marek
+trainer_email: marek.trener@example.com
 phone: "48000000002"
 plan: plans/upper_lower.yaml
 

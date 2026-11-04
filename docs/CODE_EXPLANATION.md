@@ -21,12 +21,17 @@ A walk through what happens at runtime: which function calls which, in what orde
 | `src/wabot/models.py` | Database tables (see the end of this file) |
 | `src/wabot/db.py` | Database engine and sessions |
 | `src/wabot/config.py` | `Settings`: every value from `.env` |
+| `src/wabot/dashboard/routes.py` | The trainers' dashboard pages under `/dashboard` (Flow 6); `install(app)` adds them to the app |
+| `src/wabot/dashboard/auth.py` | Who is signed in (signed session cookie), `current_trainer` and `trainee_of_trainer`: the only place that decides which trainees a trainer may see |
+| `src/wabot/dashboard/queries.py` | What the pages read: `current_per_day()` (the newest row of each day, the rule for every report type), `weigh_ins()` (each day's weight with the message it came from) |
+| `src/wabot/dashboard/templates/`, `static/` | `base.html` (the sidebar with the trainee dropdown) and one template per page; `app.css`, `app.js` (folding the sidebar, the phone drawer, the dropdown, the "Wybierz podopiecznego" hint), `weight_chart.js` (the weight chart, an SVG drawn in the browser) |
 | `src/wabot/utils.py` | `hardcoded_first_message()`, a fixed text used instead of the LLM |
 | `plans/example.yaml` | Example training plan; `scripts/add_trainee.py` gives it to new trainees |
 | `plans/upper_lower.yaml`, `plans/beginner_fbw.yaml` | Two more real plans: an upper/lower split on fixed weekdays, and two alternating full-body workouts for a beginner |
 | `scenarios/*.yaml` | A month of reports per simulated trainee (Kasia, Tomek, Ola: one plan each, two trainers): the messages, the answer a correct model gives, and what must be saved. The format is explained at the top of `kasia.yaml` |
 | `src/wabot/simulation.py` | Replays the scenarios through `main.reply()` at simulated times (used by the month test and `scripts/simulate_month.py`, not by the app) |
 | `run.sh` | Local start: migrate, test message, tunnel, webhook, uvicorn |
+| `run_dashboard.sh` | Local dashboard: uvicorn on `simulated_month.db` with the dev login (fills it with `--canned` if it's missing) |
 | `scripts/` | One-off command-line tools (see Flows 3 and 5) |
 
 ## What happens at import / startup
@@ -286,6 +291,31 @@ days:
         replacements: [leg_press, bulgarian_split_squat]
 ```
 
+## Flow 6: a trainer opens the dashboard
+
+The same FastAPI app as the webhook; `main.py` calls `dashboard.routes.install(app)` at import, which adds the `/dashboard` pages, the static files and the redirect to the login page.
+
+1. **`GET /dashboard/trainees/3/weight`** → FastAPI resolves the page's dependencies first:
+   - `auth.current_trainer`: reads the `wabot_session` cookie, checks its signature (key: `DASHBOARD_SESSION_SECRET`, or a fixed dev key with `DASHBOARD_DEV_LOGIN=True`) and its age (30 days), loads the `Trainer`. No cookie, a bad one, or a trainer that no longer exists: it raises `NotSignedIn`, which the handler from `install()` turns into a redirect to `/dashboard/login`.
+   - `auth.trainee_of_trainer`: loads trainee 3 and answers **404** unless `trainee.trainer_id` is the signed-in trainer's. Pages get the trainer and trainee only from these two, never from the URL or a form, so a trainer can't open another trainer's trainee by changing the number.
+2. The page function (`routes.weight`) calls `render()`, which adds what every page needs: the trainer's own trainees for the dropdown, the chosen trainee, the current section. The dropdown's options are the same page for each trainee (`/trainees/<id>/weight`), and `app.js` opens the chosen one.
+3. The template extends `base.html` (sidebar: dropdown, Waga / Treningi / Plan treningowy, greyed out without a trainee, then Podopieczni, the trainer's name and Wyloguj). Without a trainee, hovering a trainee page shows "Wybierz podopiecznego" instead of its name, and clicking it highlights the dropdown (`app.js`).
+
+**The weight page** (`routes.weight`): `queries.weigh_ins()` takes the trainee's `weight_entries`, keeps the newest row of each date (`current_per_day()`: `MAX(id)` per date, so a correction like "sorki, 81" wins), and adds the body of the message each was saved from and how many reports the day had. The template shows three tiles (last weight, change since the first weigh-in, number of days), the chart, and a table of every day (newest first, the change from the day before, the message, "poprawiona" when the day was reported more than once). The chart's points go into the page as JSON (`<script type="application/json" id="weight-data">`, escaped by Jinja's `tojson`); `static/weight_chart.js` reads it and draws the SVG: dates spaced by time, round kg gridlines around the data (not from zero), the latest value at the end of the line, and a tooltip with the day, the weight and the message for the day nearest the pointer (or the arrow keys).
+
+**Signing in with Google** (when `GOOGLE_CLIENT_ID` is set):
+
+1. `GET /dashboard/login` shows Google's "Zaloguj się przez Google" button (Google's script, `accounts.google.com/gsi/client`).
+2. The trainer picks an account in Google's popup. Google's script then posts a form to `POST /dashboard/login/google` with `credential` (an ID token: a JWT signed by Google with the account's email) and `g_csrf_token` (the same random value is also set as a cookie; `google_login()` checks they match, so another site can't post a token here).
+3. `auth.verify_google_token()` checks the token with Google's public keys (`google-auth`): signature, expiry, issued for our client ID, and `email_verified`. Invalid: the login page again with an error (401).
+4. `trainees.trainer_by_email()` finds the trainer whose `trainers.email` is that email (lowercase). None: "Brak dostępu" (403). Otherwise `auth.sign_in()` sets the session cookie and redirects to `/dashboard`.
+
+So a trainer gets access when the operator gives their trainer row their Google email (`scripts/add_trainee.py --trainer-email`). Signing in needs `DASHBOARD_SESSION_SECRET`; the login page says so when it's missing.
+
+**Dev login** (`DASHBOARD_DEV_LOGIN=True`, local only): the login page also lists every trainer, and `POST /dashboard/login/dev` signs in as the one clicked, no Google. Without the setting, `/login/dev` answers 404. `POST /dashboard/logout` deletes the cookie.
+
+**Data to look at locally:** the simulation's database. `uv run python scripts/simulate_month.py` (real model) or `uv run python scripts/simulate_month.py --canned` (the correct answers, no OpenAI) builds `simulated_month.db` with the same migrations as `wabot.db` and fills it with the three scenario trainees and their trainers, emails included; then `DATABASE_URL=sqlite:///simulated_month.db DASHBOARD_DEV_LOGIN=true uv run uvicorn wabot.main:app --reload` and open http://localhost:8000/dashboard.
+
 ## The database
 
 `models.py`; changing a model means a new Alembic migration (see CLAUDE.md for the command).
@@ -298,7 +328,7 @@ trainers ──< trainees ──< messages
 
 | Table | Columns | |
 |---|---|---|
-| `trainers` | `id`, `name`, `created_at` | created by `scripts/add_trainee.py` for now |
+| `trainers` | `id`, `name`, `email` (unique, null until set), `created_at` | created by `scripts/add_trainee.py` for now; `email` is the Google account for the dashboard |
 | `trainees` | `id`, `trainer_id`, `phone` (unique), `name`, `timezone`, `consent_date`, `training_plan` (JSON), `created_at` | `phone` is how a message finds its trainee; `training_plan` is a `plans.TrainingPlan`, read with `plans.of(trainee)` |
 | `messages` | `id`, `wamid` (unique), `direction` (`in`/`out`), `phone`, `type`, `body`, `trainee_id`, `trainer_id`, `created_at` | chat history and webhook dedup; `body` and `trainee_id` are null for unregistered numbers (and for messages from before migration 0002) |
 | `weight_entries` | `id`, `trainer_id`, `trainee_id`, `date`, `kg`, `message_id`, `created_at`, `updated_at` | |
@@ -330,14 +360,18 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 | change the model | `OPENAI_MODEL` in `.env` (default in `config.py`) |
 | change the retry count | `ATTEMPTS` in `assistant.py` |
 | change plausibility limits | constants at the top of `llm_output.py` |
-| see how the real model handles a month of reports | `uv run python scripts/simulate_month.py` (`--only tomek` for one trainee): the 45 messages of `scenarios/*.yaml` in time order through `main.reply()` at simulated times, into `simulated_month.db` (never `wabot.db`), nothing sent to WhatsApp; prints each reply and what was saved, then each trainee's current values per day |
+| look at the dashboard with data | `uv run python scripts/simulate_month.py --canned` (or without `--canned`), then run uvicorn with `DATABASE_URL=sqlite:///simulated_month.db DASHBOARD_DEV_LOGIN=true` (Flow 6) |
+| let a trainer sign in with Google | `uv run python scripts/add_trainee.py --phone <a trainee of theirs> --trainer-email them@gmail.com`; `GOOGLE_CLIENT_ID` and `DASHBOARD_SESSION_SECRET` in `.env` (README) |
+| add a column to trainers or trainees | the model + a migration, and a value for the simulated people in `scenarios/*.yaml` / `simulation.register()` (a test checks none is empty) |
+| add a dashboard page | a function in `dashboard/routes.py` that depends on `TrainerDep` (and `TraineeDep` for a trainee page) and calls `render()`, a template extending `base.html`, an entry in `TRAINEE_SECTIONS` for the sidebar, a test in `tests/test_dashboard.py` |
+| see how the real model handles a month of reports | `uv run python scripts/simulate_month.py` (`--only tomek` for one trainee): the 45 messages of `scenarios/*.yaml` in time order through `main.reply()` at simulated times, into `simulated_month.db` (never `wabot.db`; built by the migrations, so its tables are the real ones), nothing sent to WhatsApp; prints each reply and what was saved, then each trainee's current values per day |
 | add a simulated trainee or message | a new `scenarios/<name>.yaml` (or a report in one): `text`, the answer a correct model gives, and `saved` where the code must change it; the month test checks it and the script sends it |
 
 ## Not built yet
 
-- **Corrections of older reports.** The LLM doesn't see what's saved, only the chat history. A correction of a training whose report is no longer in the history (older than 24 h or 20 messages, or always with `HISTORY_MODE=new_only`) replaces that day with just the corrected part. Milestone 3: show the LLM the saved entries of the last days.
+- **Corrections of older reports.** The LLM doesn't see what's saved, only the chat history. A correction of a training whose report is no longer in the history (older than 24 h or 20 messages, or always with `HISTORY_MODE=new_only`) replaces that day with just the corrected part. Milestone 4: show the LLM the saved entries of the last days.
 - **Diet reports** are only acknowledged, not extracted or saved.
-- No dashboard, no reminders, no photos.
+- The dashboard has the trainee list and the weight chart; Treningi and Plan treningowy are still empty. Google sign-in is built but untested against real Google until there's an OAuth client ID. No reminders, no photos.
 
 ## Tests
 
@@ -347,4 +381,5 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 - `test_entries.py`: Flow 2b: one entry per day, corrections, out-of-order saves, exercises replaced.
 - `test_conversation.py`: the name trigger, history per trainee, `asked_again()`, plan injection and the plan text, bad plans, the example plan, `exercises.lookup()`, the trainee's local date, `scripts/add_trainee.py`.
 - `test_month_scenario.py`: the three trainees of `scenarios/` (15 reports each in October 2026, three plans, two trainers), interleaved in time order through the whole reply flow (`simulation.Replay` → `main.reply()` → `_complete()` with a fake OpenAI client returning the scenario's answer → `validate_output()` → `entries.save()`). After every message it checks that the model got only that trainee's messages and the simulated date, and what was saved: weight, plan day, status, missed exercises, exercise IDs and replacements. Runs in both `DAILY_UPDATES_ONLY` modes. Some answers say `done` where the code must make it `partial`.
+- `test_dashboard.py`: Flow 6: pages redirect to the login page without a session, the dev login only with `DASHBOARD_DEV_LOGIN`, a trainer sees only their own trainees (404 on another trainer's, also absent from the dropdown), the dropdown keeps the page, tampered or wrongly signed cookies, logout; the weight page (the newest report per day, the message, Ola's data not on Kasia's page, a message can't break out of the JSON script tag, no weigh-ins), the "Wybierz podopiecznego" hint, the Polish date and kg formats; Google sign-in with Google's token check faked: the trainer found by email (any case), refused for an unknown email, an unverified email or a forged token, the CSRF check, off without `GOOGLE_CLIENT_ID`.
 - `test_llm_output.py`: `validate_output()` accepting and rejecting outputs (incl. the checks against the plan's IDs and catalog matching by name), the retry in `_complete()` with a fake OpenAI client, the schema.

@@ -59,6 +59,8 @@ class Trainer(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
+    # The Google account the trainer signs in to the dashboard with, lowercase.
+    email: Mapped[str | None] = mapped_column(String(254), unique=True, index=True)
     created_at: Mapped[dt.datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 

@@ -11,13 +11,18 @@ The database is kept afterwards, so the saved months can be inspected (or used t
 dashboard against). tests/test_month_scenario.py replays the same scenarios with the answers
 a correct model gives, which are also in the YAML files.
 
+--canned uses those answers instead of OpenAI: no calls, the same result every time. That's
+the quick way to a database to develop the dashboard against.
+
 Run from the project root (OPENAI_API_KEY and the other settings come from .env):
     uv run python scripts/simulate_month.py
+    uv run python scripts/simulate_month.py --canned
     uv run python scripts/simulate_month.py --only tomek ola
     uv run python scripts/simulate_month.py --daily-updates-only --db other.db
 """
 
 import argparse
+import contextlib
 import logging
 import os
 import sys
@@ -42,6 +47,11 @@ def parse_args(argv):
         action="store_true",
         help="one row per day, a correction updates it (default: as in .env)",
     )
+    parser.add_argument(
+        "--canned",
+        action="store_true",
+        help="the correct answers from the scenario files instead of OpenAI (no API calls)",
+    )
     return parser.parse_args(argv)
 
 
@@ -56,13 +66,15 @@ def main(argv: list[str] | None = None) -> None:
     # Before wabot is imported: the engine is created at import time; this overrides .env.
     os.environ["DATABASE_URL"] = f"sqlite:///{args.db}"
 
+    from alembic import command
+    from alembic.config import Config
     from sqlalchemy import select
 
     from wabot import main as app
     from wabot import simulation
     from wabot.config import get_settings
-    from wabot.db import SessionLocal, engine
-    from wabot.models import Base, TrainingCheckin, WeightEntry
+    from wabot.db import SessionLocal
+    from wabot.models import TrainingCheckin, WeightEntry
 
     # Only warnings (e.g. a reply that failed validation and was retried), not every request.
     logging.getLogger().setLevel(logging.WARNING)
@@ -102,25 +114,36 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(f"Not in scenarios/: {', '.join(sorted(unknown))}")
         scenarios = [s for s in scenarios if s.key in args.only]
 
-    Base.metadata.create_all(engine)
+    # The same migrations as wabot.db, so the tables are exactly the real ones. No alembic.ini:
+    # its logging setup would silence the app's warnings.
+    alembic = Config()
+    alembic.set_main_option("script_location", "alembic")
+    command.upgrade(alembic, "head")
     settings = get_settings()
     if args.daily_updates_only:
         settings = settings.model_copy(update={"daily_updates_only": True})
-    if not settings.openai_api_key:
+    if args.canned:
+        settings = settings.model_copy(update={"openai_api_key": "canned"})
+    elif not settings.openai_api_key:
         sys.exit("OPENAI_API_KEY is not set in .env")
     app.get_settings = lambda: settings
 
     registered = {s.key: simulation.register(s) for s in scenarios}
     print(
-        f"model {settings.openai_model}, history {settings.history_mode}, "
+        f"model {'canned answers' if args.canned else settings.openai_model}, "
+        f"history {settings.history_mode}, "
         f"daily_updates_only={settings.daily_updates_only}"
     )
     for s in scenarios:
-        print(f"  {s.name} ({s.trainer}): {s.plan_path}")
+        print(f"  {s.name} ({s.trainer}, {s.trainer_email}): {s.plan_path}")
     print()
 
-    with simulation.Replay() as replay:
+    with contextlib.ExitStack() as stack:
+        replay = stack.enter_context(simulation.Replay())
+        canned = stack.enter_context(simulation.canned_llm()) if args.canned else None
         for i, (at, scenario, report) in enumerate(simulation.timeline(scenarios), 1):
+            if canned:
+                canned.answers.append(simulation.correct_answer(scenario, report))
             message_id = replay.send(registered[scenario.key], report["text"], at)
             print(f"[{i:2}] {report['at']}  {scenario.name}: {report['text']}")
             print("     bot: " + replay.replies[-1].replace("\n", "\n          "))
@@ -139,7 +162,10 @@ def main(argv: list[str] | None = None) -> None:
                 parts.append(f"{label}: {c.status}{missed}")
             print(f"  {day} {day:%a}  " + "; ".join(parts))
         print()
-    print(f"Saved in {args.db}")
+    print(f"Saved in {args.db}. The dashboard on this data:")
+    print(
+        f"  DATABASE_URL=sqlite:///{args.db} DASHBOARD_DEV_LOGIN=true uv run uvicorn wabot.main:app"
+    )
 
 
 if __name__ == "__main__":

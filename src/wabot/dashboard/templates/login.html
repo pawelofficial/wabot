@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Logowanie – Yanek</title>
+  <link rel="stylesheet" href="/dashboard/static/app.css">
+  {% if google_client_id %}<script src="https://accounts.google.com/gsi/client" async></script>{% endif %}
+</head>
+<body class="login">
+  <div class="login-box">
+    <h1>Yanek</h1>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+    {% if google_client_id %}
+      {% if missing_secret %}
+      <p class="error">Ustaw DASHBOARD_SESSION_SECRET w .env, inaczej logowanie Google nie zadziała.</p>
+      {% endif %}
+      <div id="g_id_onload" data-client_id="{{ google_client_id }}" data-login_uri="{{ google_login_uri }}" data-auto_prompt="false"></div>
+      <div class="g_id_signin" data-type="standard" data-size="large" data-text="signin_with" data-locale="pl"></div>
+    {% elif not dev_login %}
+    <p>Logowanie nie jest skonfigurowane (GOOGLE_CLIENT_ID).</p>
+    {% endif %}
+
+    {% if dev_login %}
+    <h2>Logowanie testowe</h2>
+    <p class="muted">DASHBOARD_DEV_LOGIN: wybierz trenera, bez hasła.</p>
+    {% for t in trainers %}
+    <form method="post" action="/dashboard/login/dev">
+      <input type="hidden" name="trainer_id" value="{{ t.id }}">
+      <button type="submit">{{ t.name }}{% if t.email %} <span class="muted">· {{ t.email }}</span>{% endif %}</button>
+    </form>
+    {% else %}
+    <p class="muted">W bazie nie ma trenerów.</p>
+    {% endfor %}
+    {% endif %}
+  </div>
+</body>
+</html>

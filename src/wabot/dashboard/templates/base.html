@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{% endblock %} – Yanek</title>
+  <link rel="stylesheet" href="/dashboard/static/app.css">
+  {# Before the page draws, so a folded sidebar doesn't flash open. #}
+  <script>try { if (localStorage.getItem("sidebar") === "folded") document.documentElement.classList.add("folded"); } catch (e) {}</script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <span class="brand">Yanek</span>
+      <button class="fold" type="button" data-fold aria-label="Zwiń lub rozwiń menu">«</button>
+    </div>
+
+    <label class="picker">
+      <span>Podopieczny</span>
+      <select data-trainee-picker>
+        <option value="" disabled {% if not trainee %}selected{% endif %}>Wybierz…</option>
+        {% for t in trainees %}
+        <option value="/dashboard/trainees/{{ t.id }}/{{ dropdown_section }}" {% if trainee and t.id == trainee.id %}selected{% endif %}>{{ t.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <nav>
+      {% for key, label, icon in sections %}
+        {% if trainee %}
+        <a href="/dashboard/trainees/{{ trainee.id }}/{{ key }}" {% if section == key %}class="active" aria-current="page"{% endif %} title="{{ label }}">
+          <span class="icon">{{ icon }}</span><span class="label">{{ label }}</span>
+        </a>
+        {% else %}
+        <span class="disabled" tabindex="0" role="button" data-hint="Wybierz podopiecznego" title="Wybierz podopiecznego">
+          <span class="icon">{{ icon }}</span><span class="label">{{ label }}</span>
+        </span>
+        {% endif %}
+      {% endfor %}
+      <hr>
+      <a href="/dashboard" {% if section == "overview" %}class="active" aria-current="page"{% endif %} title="Podopieczni">
+        <span class="icon">👥</span><span class="label">Podopieczni</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-bottom">
+      <span class="label" title="{{ trainer.name }}">{{ trainer.name }}</span>
+      <form method="post" action="/dashboard/logout">
+        <button type="submit" title="Wyloguj"><span class="icon">⎋</span><span class="label">Wyloguj</span></button>
+      </form>
+    </div>
+  </aside>
+  <div class="backdrop" data-close-menu></div>
+
+  <main>
+    <header class="topbar">
+      <button class="menu-button" type="button" data-open-menu aria-label="Menu">☰</button>
+      <h1>{% block heading %}{% endblock %}</h1>
+    </header>
+    {% block content %}{% endblock %}
+  </main>
+  <script src="/dashboard/static/app.js"></script>
+</body>
+</html>

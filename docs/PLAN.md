@@ -52,9 +52,9 @@ One LLM call per such message, with:
 - **The trainee's local date** after the history, so "wczoraj" / "w poniedziałek" resolve correctly.
 - **Structured output** (decided 2026-11-03, replacing the write tools for now) – a JSON schema with `reply` (the Polish WhatsApp text), `weight` (`kg`, `date`) and `training` (`date`, `plan_day` as named in the plan, `status` done/partial/skipped, `exercises` with a catalog `exercise_id`, sets/reps/weight, `replaces` (the ID of the plan exercise a substitute was done instead of) and a free-text `comment`, `notes`), each null when not reported. `missed_exercises` (plan exercise IDs) is not asked of the model: see the next point. The app saves what it gets and only then sends the reply (a failed save sends the apology instead); only data from messages since the bot's last reply is extracted.
 - **What isn't reported counts as not done** (decided 2026-11-03). The model only says which exercises were done or replaced and which plan day it was. The code works out the rest. Missed = the plan day's exercises that aren't in the report as done or replaced. Status = `done` when nothing is missed, otherwise `partial` (`skipped` comes from the model). So "zrobiłem tylko klatę" and "skos 4x10" both save the chest exercise as done and the rest as missed. The bot doesn't ask about the rest. It says what it saved and what's missing, and that a full report for the day replaces it. Muscle-group words ("klata", "plecy") mean that day's exercises for the group, so they aren't aliases of single exercises in the catalog.
-- **Every report is kept; the newest one per day is the current value** (decided 2026-11-03, replacing "one per day, a newer one overwrites it"). "yanek 80 kg", then "yanek sorki, 81" leaves two weight rows for the day, 80 and 81, and readers (dashboard, reports) take the newest row of each day (highest `id`). Nothing a trainee sent is lost, and the data can be cleaned up or combined in the database later. `DAILY_UPDATES_ONLY=True` switches back to one row per day that a newer report overwrites. For a correction or addition to a training ("przysiad był na 65 kg", "dorzuć plank") the LLM returns the whole session again, copying the rest from the earlier report in the history. That only works while the earlier report is in the history it gets (24 h / 20 messages, and not with `HISTORY_MODE=new_only`); otherwise the newest row of the day has just the corrected part. Showing the LLM the saved entries of the last days fixes that (milestone 3).
+- **Every report is kept; the newest one per day is the current value** (decided 2026-11-03, replacing "one per day, a newer one overwrites it"). "yanek 80 kg", then "yanek sorki, 81" leaves two weight rows for the day, 80 and 81, and readers (dashboard, reports) take the newest row of each day (highest `id`). Nothing a trainee sent is lost, and the data can be cleaned up or combined in the database later. `DAILY_UPDATES_ONLY=True` switches back to one row per day that a newer report overwrites. For a correction or addition to a training ("przysiad był na 65 kg", "dorzuć plank") the LLM returns the whole session again, copying the rest from the earlier report in the history. That only works while the earlier report is in the history it gets (24 h / 20 messages, and not with `HISTORY_MODE=new_only`); otherwise the newest row of the day has just the corrected part. Showing the LLM the saved entries of the last days fixes that (milestone 4).
 - **Messages sent close together** (decided 2026-11-03): when the trainee calls the bot again before the first reply is out ("yanek 80", "yanek sorki, 81"), only the later message is answered. Its history has both, since both come after the bot's last message. An older report also never overwrites an entry saved from a newer message.
-- **Exercise catalog** (decided 2026-11-03) – `src/wabot/exercises.yaml` gives every exercise a fixed ID (e.g. `leg_press` for "suwnica", "wypychanie nóg", "leg press"), so progress can be charted per exercise however it's named and across plan changes. The schema only allows catalog IDs. Starts with 22 exercises maintained in the repo; trainers adding their own is a dashboard feature (milestone 4).
+- **Exercise catalog** (decided 2026-11-03) – `src/wabot/exercises.yaml` gives every exercise a fixed ID (e.g. `leg_press` for "suwnica", "wypychanie nóg", "leg press"), so progress can be charted per exercise however it's named and across plan changes. The schema only allows catalog IDs. Starts with 22 exercises maintained in the repo; trainers adding their own is a dashboard feature (milestone 3).
 - **Training plans are built from the catalog** (decided 2026-11-03, replacing free-text plans). A plan is days of catalog exercise IDs, each with optional sets, reps, weight, a note, and the **replacements the trainer allows** (also IDs), plus free-text notes for everything else (goal, cardio days, remarks). Until the dashboard builds plans from the catalog, they're YAML files (`plans/example.yaml`) registered with `scripts/add_trainee.py`, which rejects unknown IDs; they're stored as JSON on the trainee. Why: sending the whole catalog with every message is mostly noise, but without it the model can't map "siady" or "suwnica" to an ID. The plan's exercises and replacements, with their aliases, are what a report almost always mentions, so only they go into the prompt. The model sets IDs only for those; any other exercise ("pompki zamiast wykroków" when push-ups aren't listed) gets its full Polish name, and the code matches that name against the catalog's names and aliases (null if nothing matches). A replacement the trainer didn't list is still saved, with `replaces`; the trainee can ask the bot what they may do instead of an exercise.
 - Read tools (`get_diet_plan`, `get_trainer_notes`, `get_recent_entries`) are still open; the training plan is injected rather than fetched by a tool.
 
@@ -70,13 +70,61 @@ The trainee identity is resolved server-side from the sender's phone number and 
 
 ## Dashboard (trainer only)
 
-- Sign-in: Firebase Auth / Identity Platform (email or Google).
+- Sign-in: Google accounts (Sign in with Google; see "Site structure" below).
 - Trainee list with last report per category and overdue highlighting.
 - Trainee page: weight chart, training calendar (below), training and diet check-in history, photos.
 - Edit: training plan (built from the exercise catalog: days, exercises, sets/reps/weight, allowed replacements), diet plan, notes (free text), reminder schedule.
 - Register trainee: name, phone, consent-on-file date.
 - Exercises: add the trainer's own; map reported exercises that have no ID (see "Open ideas").
 - Every query filtered by the signed-in trainer's ID.
+
+### Site structure (decided 2026-11-04; step 1 built)
+
+Same FastAPI app as the bot, server-rendered Jinja templates plus HTMX, charts drawn as SVG by small scripts of our own (Chart.js only if a chart needs it). No JS build step: htmx is vendored into `static/` when first needed, styles are one plain CSS file.
+
+**Layout.** Every page extends `base.html`: a left sidebar that folds to icons (the state is kept in `localStorage`); on a phone it becomes a drawer behind a ☰ button, since trainers will often check from their phone. Top to bottom:
+
+1. Trainee dropdown – this trainer's trainees only. Choosing one opens the same section for that trainee (on "Waga" for Kasia → "Waga" for Ola).
+2. Trainee sections (greyed out until a trainee is chosen): **Waga** (weight chart), **Treningi** (training calendar and check-in history), **Plan treningowy** (the plan, with an Edit button); Treningi and Plan treningowy are separate views (decided 2026-11-04). Later: Dieta, Wiadomości (the WhatsApp chat as the bot saw it), Przypomnienia.
+3. Trainer sections, separated by a line: **Podopieczni** (the home view), later Dodaj podopiecznego, Ćwiczenia.
+4. At the bottom: the trainer's name and Wyloguj.
+
+**Home view = trainee overview.** One row per trainee: last weight and its date, last training and its status, sessions this week, and highlighting when a report type is older than a few days (the MVP "missed reports" rule). Clicking a row opens that trainee's Treningi. It needs no trainee chosen, which is why it's the home view.
+
+**URLs carry the trainee**, not the session, so pages can be bookmarked and the back button works. UI text is Polish, code and URLs English:
+
+| URL | Page |
+|---|---|
+| `/dashboard` | Podopieczni (overview) |
+| `/dashboard/trainees/{id}/weight` | Waga |
+| `/dashboard/trainees/{id}/trainings` | Treningi (`?month=2026-10`) |
+| `/dashboard/trainees/{id}/plan`, `/plan/edit` | Plan treningowy, its editor |
+| `/dashboard/login`, `/dashboard/logout` | sign-in |
+
+Chart data is embedded in the page as JSON (`<script type="application/json">`), not fetched separately. HTMX is for partial updates: the details of a calendar day, switching months, saving a plan edit.
+
+**Who may see what – one place in the code.** Two FastAPI dependencies that every dashboard route uses: `current_trainer` (from the session cookie; redirects to the login page when there is none) and `trainee_of_trainer` (loads `{id}` and answers 404 when it belongs to another trainer). Queries take the trainer from these, never from the URL or a form. Tests check that Trener Marek gets 404 on Ewa's trainee.
+
+**Sign-in** (built 2026-11-04). "Sign in with Google" (Google Identity Services) with an OAuth client ID from any Google Cloud project, no Identity Platform or Firebase (decided 2026-11-04: Google accounts are the only sign-in method, and this needs no extra service; Identity Platform can come later if trainers need email and password). The login page runs Google's sign-in in the browser, posts the ID token to the server, the server verifies it (`google-auth`) and looks up a trainer by the verified email, then sets its own signed session cookie. Trainers are still created by hand: the operator adds a `trainers` row with the trainer's Google email (new column `trainers.email`, unique), and anyone else gets "Brak dostępu". Chosen over IAP (Identity-Aware Proxy), which needs no login code but puts the whole Cloud Run service behind Google sign-in, so Meta's webhook would need a second service. **Locally** there's no Google: `DASHBOARD_DEV_LOGIN=True` makes the login page a list of trainers to sign in as (never in production). The dashboard is developed on the simulation's data: `simulated_month.db` (three trainees, two trainers, a month of reports), built by the same migrations as the real database, with simulated people that have every field real ones have, emails included (decided 2026-11-04: a field the dashboard needs goes into the scenarios too; a test checks no column is left empty).
+
+**Code layout.**
+
+- `src/wabot/dashboard/routes.py` – an `APIRouter` included by `main.py`; one function per page
+- `src/wabot/dashboard/auth.py` – session cookie, `current_trainer`, `trainee_of_trainer`, the dev login, later token verification
+- `src/wabot/dashboard/queries.py` – reads for the pages, e.g. the current value per day (the newest row, see "Every report is kept"), so the pages don't each repeat that rule
+- `src/wabot/dashboard/templates/` – `base.html` (layout, sidebar), one template per page, `partials/` for HTMX fragments
+- `src/wabot/dashboard/static/` – `app.css`, `app.js` (sidebar, dropdown), `weight_chart.js`; later a vendored `htmx.min.js`
+
+New dependencies: `jinja2`, `itsdangerous` (signed session cookie), `python-multipart` (forms), `google-auth[requests]` (verifying Google's ID tokens).
+
+**Order of work.**
+
+1. ✅ (2026-11-04) Skeleton: `trainers.email` migration, the router, `base.html` with the sidebar and dropdown, dev login, the guard dependencies and their tests, an empty page per section. Data: `uv run python scripts/simulate_month.py [--canned]`.
+2. Home view (overview table).
+3. ✅ (2026-11-04) Waga: the chart (newest value per day, with the original message on hover), tiles for the last weight and the change, a table of every day. Drawn as SVG by a small script (`static/weight_chart.js`) rather than Chart.js: one line and a few dozen points don't need a library.
+4. Treningi: the calendar (see "Training calendar" below) and the day details.
+5. Plan treningowy: read-only view, then the editor.
+6. ✅ (2026-11-04, built ahead) Google sign-in. Still to do: create the OAuth client ID and try it against real Google (README, "Dashboard").
 
 ### Training calendar (idea, noted 2026-11-03)
 
@@ -102,7 +150,7 @@ A month view per trainee. Each day shows the newest training check-in of that da
 | Files | Cloud Storage (photos) |
 | Scheduling | Cloud Scheduler → reminders endpoint |
 | Secrets | Secret Manager |
-| Dashboard UI | Server-rendered Jinja + HTMX, charts with Chart.js |
+| Dashboard UI | Server-rendered Jinja + HTMX, charts as SVG drawn by our own small scripts |
 | Tooling | uv, ruff, pytest; cloudflared/ngrok tunnel for local webhook testing |
 
 ### Core data model
@@ -129,7 +177,7 @@ The goal is the smallest version that a trainer can use with real trainees. Wher
 
 ## Risks
 
-- **Meta business verification and template approval** are slow and outside our control, so start milestone 6 while building the dashboard (milestone 4).
+- **Meta business verification and template approval** are slow and outside our control, so start milestone 6 while building the dashboard (milestone 3).
 - **Health data under GDPR.** Keep all GCP resources in EU regions, and note that the OpenAI API processes message text (requests are sent with `store=false`) (check its data-processing terms and retention). The paper consent should mention both.
 - **Parsing mistakes.** Every save is confirmed back to the trainee, and corrections are supported. The dashboard shows the original message next to each entry so the trainer can check it.
 - **Cost:** LLM tokens per message and Meta template fees per reminder. Estimate both once message volumes are known.
@@ -146,16 +194,16 @@ The goal is the smallest version that a trainer can use with real trainees. Wher
 Milestones 1–5 are developed and run **locally** (`bash run.sh` migrates the database, sends a test message and starts the bot; see README): FastAPI on the laptop, a cloudflared/ngrok tunnel for Meta's webhook, and a SQLite file as the database. GCP is set up in milestone 7, where SQLite is replaced by Cloud SQL Postgres. To keep that switch easy, all database access goes through SQLAlchemy and Alembic, avoids SQLite- and Postgres-specific features, and stores timestamps in UTC.
 
 1. **Echo bot** ✅ done (2026-10-29) – webhook verification, signature check, dedup, reply; tested locally via tunnel.
-2. **Submissions** 🚧 in progress – trainee lookup by phone, database, saving the extracted entries, confirmations.
+2. **Submissions** ✅ done (2026-11-04) – trainee lookup by phone, database, saving the extracted entries, confirmations.
    - Done (2026-10-29): the LLM (`src/wabot/assistant.py`; OpenAI since 2026-11-01) replies in Polish instead of the echo, using the trainee's last 20 messages from the past 24 h and today's date in Warsaw. Nothing is saved yet besides the messages themselves, so the bot says it "noted" a report. Model is set by `OPENAI_MODEL` (default `gpt-5.6-luna`, low reasoning effort).
    - Done (2026-11-03): the bot answers only when called by name ("yanek"), returns weight and training as JSON next to the reply, and gets the training plan injected into its prompt.
    - Done (2026-11-03): `trainers` and `trainees` tables, the trainee looked up by phone (fixed reply for unknown numbers), each trainee's own plan and timezone from the db, `weight_entries` and `training_checkins` / `training_exercises` filled from the extracted JSON (every report a new row, the newest per day is current; `DAILY_UPDATES_ONLY` overwrites instead), messages linked to their trainee, and `scripts/add_trainee.py` to register a test trainer and trainee.
    - Done (2026-11-03): training plans built from the exercise catalog, with replacements chosen by the trainer; only the plan's exercises go into the prompt (see "The LLM's role").
-   - Not done yet: diet reports, which the bot only acknowledges.
-3. **Conversation** – chat history, clarifications, plan questions, corrections. Corrections need the LLM to see the trainee's saved entries of the last days (injected, or a `get_recent_entries` tool), so a correction of an older training doesn't replace the day with just the corrected part.
-4. **Dashboard** – trainer login, trainee registration, plan editing, weight chart, check-in history, last-report view.
+   - Moved to milestone 4: diet reports, which the bot only acknowledges.
+3. **Dashboard** 🚧 in progress – trainer login, trainee registration, plan editing, weight chart, check-in history, last-report view (see "Site structure"). Moved ahead of the conversation milestone on 2026-11-04: basic reporting works, and seeing the saved data makes the conversation problems easier to spot.
+4. **Conversation** – clarifications, plan questions, corrections, diet reports. The chat history (24 h / 20 messages) already exists. Corrections need the LLM to see the trainee's saved entries of the last days (injected, or a `get_recent_entries` tool), so a correction of an older training doesn't replace the day with just the corrected part. Also open from the real-model simulation (2026-11-04): whether a moved workout on a rotation plan counts as skipped, and whether "trening 2 zrobiony!" plus one exercise means the whole day was done.
 5. **Reminders** – per-trainee schedules, Meta templates, Cloud Scheduler.
-6. **Go-live accounts** – start around milestone 4, since Meta's steps can take days to weeks.
+6. **Go-live accounts** – start around milestone 3, since Meta's steps can take days to weeks.
    - Meta business verification (company documents); unverified accounts have low messaging limits.
    - Production bot number: a Polish prepaid SIM (decided – not a personal number, which would lose its WhatsApp account), never registered on WhatsApp. It only has to receive one verification SMS or call – no device stays connected – but keep the number active so it can be re-verified later.
    - Bot display name (Meta reviews it).

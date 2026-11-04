@@ -11,9 +11,13 @@
 #                        {id, sets, reps, kg, replaces}, or {name} for something outside the catalog
 #             notes
 #   saved:    what the code must save where it differs from the answer: status, missed
+#
+# The trainee and trainer get every field a real one has (tests/test_month_scenario.py
+# checks that none is empty): trainer_email is what the trainer signs in to the dashboard with.
 
 name: Kasia
 trainer: Trener Marek
+trainer_email: marek.trener@example.com
 phone: "48000000001"
 plan: plans/example.yaml
 

@@ -229,3 +229,4 @@ screen*.png
 
 # scripts/simulate_month.py output
 simulated_month.db*
+

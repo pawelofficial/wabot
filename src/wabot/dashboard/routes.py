@@ -1,0 +1,205 @@
+"""The dashboard's pages. Each one renders a template that extends base.html (the sidebar with
+the trainee dropdown). install() adds them to the FastAPI app in main.py."""
+
+import datetime as dt
+from pathlib import Path
+from typing import Annotated
+
+from fastapi import APIRouter, FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from wabot import trainees
+from wabot.dashboard import auth, queries
+from wabot.dashboard.auth import SessionDep, SettingsDep, TraineeDep, TrainerDep
+from wabot.models import Trainee, Trainer
+
+HERE = Path(__file__).parent
+templates = Jinja2Templates(directory=HERE / "templates")
+
+MONTHS = "sty lut mar kwi maj cze lip sie wrz paź lis gru".split()
+WEEKDAYS = "pon wt śr czw pt sob niedz".split()
+
+
+def pl_date(day: dt.date, weekday: bool = False) -> str:
+    """5 paź 2026, or with weekday=True: pon 5 paź 2026."""
+    text = f"{day.day} {MONTHS[day.month - 1]} {day.year}"
+    return f"{WEEKDAYS[day.weekday()]} {text}" if weekday else text
+
+
+def pl_kg(kg: float, signed: bool = False) -> str:
+    """82,4 kg; signed=True: +0,4 kg / −1,2 kg (a real minus sign)."""
+    text = f"{abs(kg) if signed else kg:.1f}".replace(".", ",") + " kg"
+    if signed:
+        text = ("+" if kg > 0 else "−" if kg < 0 else "±") + text
+    return text
+
+
+templates.env.filters["pl_date"] = pl_date
+templates.env.filters["pl_kg"] = pl_kg
+router = APIRouter(prefix="/dashboard", default_response_class=HTMLResponse)
+
+# The trainee pages in the sidebar: (URL part, label, icon).
+TRAINEE_SECTIONS = [
+    ("weight", "Waga", "⚖️"),
+    ("trainings", "Treningi", "🏋️"),
+    ("plan", "Plan treningowy", "📋"),
+]
+
+
+def install(app: FastAPI) -> None:
+    app.include_router(router)
+    app.mount("/dashboard/static", StaticFiles(directory=HERE / "static"), name="static")
+    # A page that needs a signed-in trainer, without one: go to the login page.
+    app.add_exception_handler(
+        auth.NotSignedIn, lambda request, exc: RedirectResponse("/dashboard/login", 303)
+    )
+
+
+def render(
+    request: Request,
+    template: str,
+    session: Session,
+    trainer: Trainer,
+    trainee: Trainee | None = None,
+    section: str | None = None,
+    **context,
+) -> HTMLResponse:
+    """A page with the sidebar: the trainer's trainees in the dropdown, `trainee` chosen."""
+    own_trainees = session.scalars(
+        select(Trainee).where(Trainee.trainer_id == trainer.id).order_by(Trainee.name)
+    ).all()
+    return templates.TemplateResponse(
+        request,
+        template,
+        {
+            "trainer": trainer,
+            "trainees": own_trainees,
+            "trainee": trainee,
+            "section": section,
+            "sections": TRAINEE_SECTIONS,
+            # Choosing another trainee opens the same page for them (Treningi from the overview).
+            "dropdown_section": section
+            if section in {s[0] for s in TRAINEE_SECTIONS}
+            else "trainings",
+            **context,
+        },
+    )
+
+
+@router.get("")
+def overview(request: Request, session: SessionDep, trainer: TrainerDep):
+    """Home: the trainer's trainees."""
+    return render(request, "overview.html", session, trainer, section="overview")
+
+
+@router.get("/trainees/{trainee_id}/weight")
+def weight(request: Request, session: SessionDep, trainer: TrainerDep, trainee: TraineeDep):
+    """The weight chart: the current weight of each day (the newest report of the day)."""
+    weigh_ins = queries.weigh_ins(session, trainee)
+    return render(
+        request,
+        "weight.html",
+        session,
+        trainer,
+        trainee,
+        "weight",
+        weigh_ins=weigh_ins,
+        chart_data=[w.as_json() for w in weigh_ins],
+    )
+
+
+@router.get("/trainees/{trainee_id}/trainings")
+def trainings(request: Request, session: SessionDep, trainer: TrainerDep, trainee: TraineeDep):
+    return render(request, "trainings.html", session, trainer, trainee, "trainings")
+
+
+@router.get("/trainees/{trainee_id}/plan")
+def plan(request: Request, session: SessionDep, trainer: TrainerDep, trainee: TraineeDep):
+    return render(request, "plan.html", session, trainer, trainee, "plan")
+
+
+def login_page_response(
+    request: Request, settings, session: Session, error: str | None = None, status: int = 200
+) -> HTMLResponse:
+    trainers = (
+        session.scalars(select(Trainer).order_by(Trainer.name)).all()
+        if settings.dashboard_dev_login
+        else []
+    )
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {
+            "dev_login": settings.dashboard_dev_login,
+            "trainers": trainers,
+            "google_client_id": settings.google_client_id,
+            "google_login_uri": str(request.url_for("google_login")),
+            "missing_secret": not settings.dashboard_session_secret,
+            "error": error,
+        },
+        status_code=status,
+    )
+
+
+@router.get("/login")
+def login_page(request: Request, settings: SettingsDep, session: SessionDep):
+    return login_page_response(request, settings, session)
+
+
+@router.post("/login/google", name="google_login")
+def google_login(
+    request: Request,
+    settings: SettingsDep,
+    session: SessionDep,
+    credential: Annotated[str, Form()],
+    g_csrf_token: Annotated[str, Form()],
+):
+    """Google's sign-in button posts the ID token here."""
+    if not settings.google_client_id:
+        raise HTTPException(404)
+    # Google sets the same random value as a cookie and a form field; another site posting
+    # here can't set the cookie.
+    if request.cookies.get("g_csrf_token") != g_csrf_token:
+        raise HTTPException(400, "CSRF token mismatch")
+    email = auth.verify_google_token(credential, settings.google_client_id)
+    if email is None:
+        return login_page_response(
+            request, settings, session, "Nie udało się zalogować przez Google.", 401
+        )
+    trainer = trainees.trainer_by_email(session, email)
+    if trainer is None:
+        return login_page_response(
+            request, settings, session, f"Brak dostępu: {email} nie jest kontem trenera.", 403
+        )
+    response = RedirectResponse("/dashboard", 303)
+    auth.sign_in(response, request, settings, trainer)
+    return response
+
+
+@router.post("/login/dev")
+def dev_login(
+    request: Request,
+    settings: SettingsDep,
+    session: SessionDep,
+    trainer_id: Annotated[int, Form()],
+):
+    """Sign in as any trainer, without a password. Only with DASHBOARD_DEV_LOGIN=True."""
+    if not settings.dashboard_dev_login:
+        raise HTTPException(404)
+    trainer = session.get(Trainer, trainer_id)
+    if trainer is None:
+        raise HTTPException(404)
+    response = RedirectResponse("/dashboard", 303)
+    auth.sign_in(response, request, settings, trainer)
+    return response
+
+
+@router.post("/logout")
+def logout():
+    response = RedirectResponse("/dashboard/login", 303)
+    auth.sign_out(response)
+    return response

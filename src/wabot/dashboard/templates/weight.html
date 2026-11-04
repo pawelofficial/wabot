@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Waga – {{ trainee.name }}{% endblock %}
+{% block heading %}Waga – {{ trainee.name }}{% endblock %}
+{% block content %}
+{% if weigh_ins %}
+{% set first, last = weigh_ins[0], weigh_ins[-1] %}
+<div class="tiles">
+  <div class="tile">
+    <div class="tile-label">Ostatni pomiar</div>
+    <div class="tile-value">{{ last.kg|pl_kg }}</div>
+    <div class="tile-note">{{ last.date|pl_date(true) }}</div>
+  </div>
+  <div class="tile">
+    <div class="tile-label">Zmiana</div>
+    <div class="tile-value">{{ (last.kg - first.kg)|pl_kg(true) }}</div>
+    <div class="tile-note">od {{ first.date|pl_date }}</div>
+  </div>
+  <div class="tile">
+    <div class="tile-label">Pomiary</div>
+    <div class="tile-value">{{ weigh_ins|length }}</div>
+    <div class="tile-note">dni z podaną wagą</div>
+  </div>
+</div>
+
+<section class="card">
+  <h2 class="card-title">Waga (kg)</h2>
+  <p class="card-subtitle">Ostatnie zgłoszenie z każdego dnia. Najedź na wykres, żeby zobaczyć wiadomość.</p>
+  <div class="chart" data-weight-chart aria-label="Wykres wagi; wartości są też w tabeli poniżej"></div>
+  <script type="application/json" id="weight-data">{{ chart_data|tojson }}</script>
+</section>
+
+<section class="card">
+  <h2 class="card-title">Wszystkie pomiary</h2>
+  <div class="table-scroll">
+    <table class="table">
+      <thead><tr><th>Dzień</th><th class="num">Waga</th><th class="num">Zmiana</th><th>Wiadomość</th></tr></thead>
+      <tbody>
+        {% set n = weigh_ins|length %}
+        {% for w in weigh_ins|reverse %}
+        {% set i = n - loop.index %}
+        <tr>
+          <td class="nowrap">{{ w.date|pl_date(true) }}</td>
+          <td class="num nowrap">{{ w.kg|pl_kg }}</td>
+          <td class="num nowrap muted">{% if i > 0 %}{{ (w.kg - weigh_ins[i - 1].kg)|pl_kg(true) }}{% endif %}</td>
+          <td class="message">
+            {% if w.message %}„{{ w.message }}”{% endif %}
+            {% if w.reports > 1 %}<span class="badge" title="Tego dnia waga była zgłoszona {{ w.reports }} razy; liczy się ostatnie zgłoszenie">poprawiona</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+<script src="/dashboard/static/weight_chart.js"></script>
+{% else %}
+<p class="empty">Brak zgłoszonej wagi. Pojawi się tu, gdy {{ trainee.name }} napisze np. „yanek waga 80,5”.</p>
+{% endif %}
+{% endblock %}

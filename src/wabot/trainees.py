@@ -20,6 +20,19 @@ def normalize_phone(text: str) -> str:
     return digits
 
 
+def normalize_email(text: str) -> str:
+    """Emails are stored and compared lowercase: Google may send "Jan.Kowalski@Gmail.com"."""
+    email = text.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise ValueError(f"{text!r} is not an email address")
+    return email
+
+
+def trainer_by_email(session: Session, email: str) -> Trainer | None:
+    """The trainer who signs in with this Google account, if any."""
+    return session.scalar(select(Trainer).where(Trainer.email == normalize_email(email)))
+
+
 def find_by_phone(session: Session, phone: str) -> Trainee | None:
     return session.scalar(select(Trainee).where(Trainee.phone == phone))
 

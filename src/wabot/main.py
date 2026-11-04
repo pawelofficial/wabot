@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from wabot import assistant, conversation, entries, trainees, whatsapp
 from wabot.config import Settings, get_settings
+from wabot.dashboard import routes as dashboard
 from wabot.db import SessionLocal, get_session
 from wabot.llm_output import LlmOutput
 from wabot.models import Message, Trainee, utcnow
@@ -18,6 +19,8 @@ log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s: %(message)s")
 
 app = FastAPI(title="wabot")
+# The trainers' dashboard under /dashboard.
+dashboard.install(app)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 SessionDep = Annotated[Session, Depends(get_session)]
