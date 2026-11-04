@@ -123,7 +123,9 @@ generate_reply()
   │     no bot message in the history:  everything is new, no marker
   │   to_llm_messages() turns stored messages into [{"role": "user"|"assistant", "content"}]:
   │     "in" → user, "out" → assistant; non-text → "[wiadomość typu image]";
-  │     leading assistant turns are dropped (the conversation must start with the trainee)
+  │     bot messages before the trainee's first one (a reminder, a message the bot started)
+  │     become one developer note first ("Wcześniej … napisałeś do podopiecznego:" + the
+  │     messages, prompts.yaml `earlier_bot_messages`), so the model knows what's answered
   ├─ + {"role": "developer", "content": _today(trainee, now)}
   │     "Dzisiaj jest wtorek, 2026-11-03, godz. 10:15." in the trainee's timezone
   └─ _complete(settings, instructions, messages, today, plan)
@@ -131,10 +133,11 @@ generate_reply()
        └─ up to ATTEMPTS (2) times:
             ├─ client.responses.create(model=OPENAI_MODEL, instructions, input=messages,
             │       text.format = strict json_schema from llm_output.json_schema(),
-            │       reasoning effort low, store=False)
+            │       reasoning effort low, store=False; client timeout 60 s, one retry)
             ├─ a "refusal" part in the output → return LlmOutput(reply=REFUSAL)
             ├─ empty output_text → RuntimeError
-            ├─ llm_output.validate_output(raw, today, plan)   → LlmOutput   (see below)
+            ├─ llm_output.validate_output(raw, today, plan, allowed_letters)   → LlmOutput
+            │       (see below; allowed_letters: the instructions and messages sent)
             └─ InvalidOutputError:
                  first attempt → append the model's raw answer + a developer message
                                  "Twoja odpowiedź nie przeszła walidacji: - <errors>"
@@ -179,7 +182,7 @@ For a correction or addition to a training reported earlier ("sorki, przysiad by
 OpenAI guarantees the structure; this function checks that the **values** make sense, and collects every problem before raising so the retry can fix them all at once:
 
 1. Parse into `LlmOutput` with pydantic. Wrong types, missing fields, extra fields, an exercise ID not in the catalog → errors like `weight.kg: Input should be a valid number`.
-2. `reply`: not empty, not JSON, at most 4096 characters (WhatsApp's limit), only Latin letters (Polish letters and emoji are fine; Cyrillic or Armenian slip-ins are not).
+2. `reply`: not empty, not JSON, at most 4096 characters (WhatsApp's limit), only Latin letters (Polish letters and emoji are fine; Cyrillic or Armenian slip-ins are not), except letters that are in the instructions or the messages sent: a Ukrainian trainee's name, or their own words.
 3. `weight`: 30–300 kg, date not in the future and not more than 31 days ago.
 4. `training`: same date window; `skipped` has no exercises, `done`/`partial` have at least one; sets 1–20; load 0–500 kg; a `replaces` exercise has `in_plan: false`.
 5. Against the plan (`_check_against_plan()`): `plan_day` must be one of the plan's days (case and spacing don't matter; it's set to the plan's exact name). An `in_plan` exercise needs the ID of an exercise planned for that day. A planned ID with `in_plan: false` is wrong unless it replaces something. `replaces` must be an ID planned for that day. Without `plan_day`, any day of the plan counts. Without a plan, `plan_day`, `in_plan` and `replaces` must all be empty.
@@ -187,7 +190,7 @@ OpenAI guarantees the structure; this function checks that the **values** make s
 
 ## Flow 2b: saving the extracted data
 
-`entries.save(session, trainee, message, output, daily_updates_only)`, called from `main.save_report()` with `DAILY_UPDATES_ONLY` from `.env`:
+`entries.save(session, trainee, message, output, daily_updates_only, now)`, called from `main.save_report()` with `DAILY_UPDATES_ONLY` from `.env` and `now=utcnow()` (the simulation's time when replaying, so simulated entries are dated like their messages). A new row gets `created_at` and `updated_at` = `now`, an updated one `updated_at`:
 
 ```
 entries.save()
@@ -308,7 +311,7 @@ The same FastAPI app as the webhook; `main.py` calls `dashboard.routes.install(a
 
 **A trainee's plan** (`plan_pages.py`, `GET /trainees/<id>/plan`): `plans.of(trainee)` (the JSON in `trainees.training_plan`) drawn by the `plan_cards` macro (`templates/_plan.html`): the notes and one card per day, a table of the exercises with their catalog names (`exercises.BY_ID`), sets, reps, weight, note and replacements. Above it a bar with the current version from `plan_history.history()` (its name, where it came from, since when), "Przypisz" with the trainer's library plans, and "Zapisz w bibliotece". Below it "Historia planów": every version, newest first, each with "Podgląd" and "Przywróć". No plan: "Utwórz plan" or a plan from the library.
 
-**Every change is a version.** Whatever changes a trainee's plan calls `plan_history.assign(session, trainee, plan, source, template)`: it adds a `trainee_plans` row (`source`: `edited`, `template`, `restored`, `script`, or `imported` for plans from before migration 0006) and sets `trainees.training_plan` to the same plan, the copy the bot reads. So the newest version is always the current plan. Saving an edit that changes nothing adds no version. An edited plan keeps the name and `template_id` of the library plan it's based on.
+**Every change is a version.** Whatever changes a trainee's plan calls `plan_history.assign(session, trainee, plan, source, template)`: it adds a `trainee_plans` row (`source`: `edited`, `template`, `restored`, `script`, or `imported` for plans from before migration 0006) and sets `trainees.training_plan` to the same plan, the copy the bot reads. So the newest version is always the current plan. A change that changes nothing adds no version (`assign()` returns None): an edit without changes, restoring a version equal to the current plan, assigning the library plan the trainee already has ("Podopieczny ma już ten plan z biblioteki"). It counts as unchanged only while the trainee has a plan (`add_trainee.py --no-plan` clears `trainees.training_plan` without a version), so saving the same plan again gives it back. An edited or restored plan keeps the name and `template_id` of the version it's based on (`based_on`). `history()` and `current_version()` see only versions with the trainee's current trainer, and the library's "Podopieczni z tym planem" only the trainer's current trainees, so a trainee moved to another trainer (`add_trainee.py --trainer`) isn't shown to the old one.
 
 **Editing** (`GET`/`POST /trainees/<id>/plan/edit`), a separate page rather than editing in place, so the plan page stays readable and "Anuluj" just leaves:
 
@@ -406,11 +409,12 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 
 ## Tests
 
-`uv run pytest`. `tests/conftest.py` points the app at a temporary SQLite db (tables recreated for every test) and sets fake tokens and keys as environment variables, which win over `.env`. No test calls WhatsApp or OpenAI.
+`uv run pytest`. `tests/conftest.py` points the app at a temporary SQLite db (tables recreated for every test) and sets fake tokens and keys as environment variables. It turns `.env` off for tests, so they don't depend on your local settings: only those values and the code's defaults apply. No test calls WhatsApp or OpenAI.
 
 - `test_webhook.py`: Flow 1 through FastAPI's test client, with the LLM and `send_text` replaced by fakes: replies, dedup, unregistered numbers, saving, corrections, a failed save, a message followed up on. Its `add_trainee()` helper is used by the other test files.
 - `test_entries.py`: Flow 2b: one entry per day, corrections, out-of-order saves, exercises replaced.
 - `test_conversation.py`: the name trigger, history per trainee, `asked_again()`, plan injection and the plan text, bad plans, the example plan, `exercises.lookup()`, the trainee's local date, `scripts/add_trainee.py`.
 - `test_month_scenario.py`: the three trainees of `scenarios/` (15 reports each in October 2026, three plans, two trainers), interleaved in time order through the whole reply flow (`simulation.Replay` → `main.reply()` → `_complete()` with a fake OpenAI client returning the scenario's answer → `validate_output()` → `entries.save()`). After every message it checks that the model got only that trainee's messages and the simulated date, and what was saved: weight, plan day, status, missed exercises, exercise IDs and replacements. Runs in both `DAILY_UPDATES_ONLY` modes. Some answers say `done` where the code must make it `partial`.
 - `test_dashboard.py`: Flow 6: pages redirect to the login page without a session, the dev login only with `DASHBOARD_DEV_LOGIN`, a trainer sees only their own trainees (404 on another trainer's, also absent from the dropdown), the dropdown keeps the page, tampered or wrongly signed cookies, logout; the weight page (the newest report per day, the message, Ola's data not on Kasia's page, a message can't break out of the JSON script tag, no weigh-ins), the "Wybierz podopiecznego" hint, the Polish date and kg formats; the plan pages (every change a version and an unchanged save none, preview and restore, another trainee's version is 404, library plans created with a name of their own, assigning copies so library edits and deletes don't change the trainee, an edit keeps the library link, copying a trainee's plan to the library, another trainer's library is 404 everywhere), the plan editor (the plan shown with catalog names, a new plan, saving trims and drops empty fields, every rule refused with its Polish message and nothing saved, the typed values shown again, broken JSON is an error and not a crash, another trainer's plan is 404, the bot's prompt has the edited plan); Google sign-in with Google's token check faked: the trainer found by email (any case), refused for an unknown email, an unverified email or a forged token, the CSRF check, off without `GOOGLE_CLIENT_ID`.
+- `test_schema.py`: the migrations build exactly the models' schema (`alembic upgrade head` on an empty db, compared like `alembic check`), every migration can be undone and redone, and no exercise ID disappears from the catalog (`tests/catalog_ids.txt` lists every ID ever used; a new ID goes at its end).
 - `test_llm_output.py`: `validate_output()` accepting and rejecting outputs (incl. the checks against the plan's IDs and catalog matching by name), the retry in `_complete()` with a fake OpenAI client, the schema.

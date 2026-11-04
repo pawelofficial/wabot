@@ -438,6 +438,7 @@ def test_a_bad_plan_is_shown_again_as_typed(client, settings, people):
     )
     assert response.status_code == 422
     assert 'value="82,5 kg"' in response.text
+    assert "data-unsaved" in response.text  # leaving asks first: nothing is saved yet
 
 
 @pytest.mark.parametrize("plan_json", ["not json", "[]", '{"days": "x"}', '{"days": [1, {}]}'])
@@ -660,3 +661,57 @@ def test_the_library_pages_need_a_signed_in_trainer(client, settings, people):
     for path in ["/dashboard/plans", "/dashboard/plans/new"]:
         response = client.get(path, follow_redirects=False)
         assert response.headers["location"] == "/dashboard/login"
+
+
+def test_a_change_that_changes_nothing_adds_no_version(client, settings, people):
+    template = add_template(people["Trener Marek"], "FBW")
+    sign_in(client, people["Trener Marek"])
+    kasia = people["Kasia"]
+    url = f"/dashboard/trainees/{kasia.id}/plan"
+    client.post(url + "/assign", data={"template_id": template.id})
+    # The same library plan again: nothing to change.
+    response = client.post(
+        url + "/assign", data={"template_id": template.id}, follow_redirects=False
+    )
+    assert response.headers["location"].endswith("?done=already_assigned")
+    save(client, kasia, edited())
+    # Restoring the version equal to the current plan.
+    with SessionLocal() as session:
+        current = plan_history.history(session, session.get(Trainee, kasia.id))[0]
+    response = client.post(f"{url}/versions/{current.id}/restore", follow_redirects=False)
+    assert response.headers["location"].endswith("?done=unchanged")
+    assert [v[0] for v in versions(kasia)] == ["template", "edited"]
+
+
+def test_a_removed_plan_comes_back_when_the_same_plan_is_saved(client, settings, people):
+    give_plan(people["Kasia"])
+    with SessionLocal() as session:  # as scripts/add_trainee.py --no-plan does
+        session.get(Trainee, people["Kasia"].id).training_plan = None
+        session.commit()
+    sign_in(client, people["Trener Marek"])
+    response = save(client, people["Kasia"], edited())
+    assert response.headers["location"].endswith("?done=saved")
+    assert stored_plan(people["Kasia"]) is not None
+
+
+def test_a_trainee_moved_to_another_trainer_isnt_in_the_old_trainers_library(
+    client, settings, people
+):
+    template = add_template(people["Trener Marek"], "FBW")
+    sign_in(client, people["Trener Marek"])
+    client.post(
+        f"/dashboard/trainees/{people['Kasia'].id}/plan/assign", data={"template_id": template.id}
+    )
+    assert "Kasia" in client.get("/dashboard/plans").text
+    with SessionLocal() as session:  # as scripts/add_trainee.py --trainer does
+        session.get(Trainee, people["Kasia"].id).trainer_id = people["Trenerka Ewa"].id
+        session.commit()
+    assert "Kasia" not in client.get("/dashboard/plans").text
+    assert "Kasia" not in client.get(f"/dashboard/plans/{template.id}").text
+
+
+def test_the_dev_login_refuses_to_run_on_cloud_run(monkeypatch):
+    monkeypatch.setenv("K_SERVICE", "wabot")
+    with pytest.raises(ValueError, match="DASHBOARD_DEV_LOGIN"):
+        Settings(dashboard_dev_login=True)
+    assert not Settings().dashboard_dev_login

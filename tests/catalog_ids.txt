@@ -1,0 +1,32 @@
+# Every exercise ID that was ever in src/wabot/exercises.yaml. Stored plans and saved trainings
+# use them, so they're permanent (tests/test_schema.py): add new IDs at the end, never remove one.
+back_squat
+leg_press
+walking_lunge
+bulgarian_split_squat
+romanian_deadlift
+good_morning
+deadlift
+hip_thrust
+glute_bridge
+bench_press
+incline_dumbbell_press
+push_up
+seated_dumbbell_press
+face_pull
+barbell_row
+dumbbell_row
+lat_pulldown
+pull_up
+plank
+farmers_walk
+running
+cycling
+overhead_press
+lateral_raise
+goblet_squat
+leg_curl
+leg_extension
+calf_raise
+biceps_curl
+triceps_pushdown

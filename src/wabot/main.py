@@ -134,7 +134,7 @@ def save_report(
     if result is None:
         return APOLOGY
     try:
-        entries.save(session, trainee, message, result, daily_updates_only)
+        entries.save(session, trainee, message, result, daily_updates_only, now=utcnow())
     except Exception:
         log.exception("Saving the report from %s failed", message.wamid)
         return APOLOGY

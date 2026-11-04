@@ -114,6 +114,9 @@ def test_a_month_of_reports_from_three_trainees(fake_llm, monkeypatch, daily_upd
                 ], where
             else:
                 assert checkins == [], where
+            # Saved at the simulated time, like the messages.
+            for entry in [*weights, *checkins]:
+                assert entry.updated_at == at, where
 
     # A correction is an extra row, unless DAILY_UPDATES_ONLY: then one row per day.
     with SessionLocal() as session:

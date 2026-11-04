@@ -85,9 +85,11 @@ def json_schema() -> dict:
     return LlmOutput.model_json_schema()
 
 
-def _foreign_letters(text: str) -> str:
+def _foreign_letters(text: str, allowed: str = "") -> str:
     """Letters that aren't Latin script (Polish letters are Latin; emoji and digits aren't
-    letters). The model occasionally slips a word from another language into the reply."""
+    letters) and aren't in `allowed`. The model occasionally slips a word from another language
+    into the reply; letters the trainee's name or messages have (e.g. a Ukrainian name) are
+    fine."""
     return "".join(
         sorted(
             {
@@ -95,6 +97,7 @@ def _foreign_letters(text: str) -> str:
                 for c in text
                 if unicodedata.category(c).startswith("L")
                 and not unicodedata.name(c, "").startswith("LATIN")
+                and c.casefold() not in allowed.casefold()
             }
         )
     )
@@ -145,8 +148,12 @@ def _check_against_plan(errors: list[str], training: Training, plan: TrainingPla
             errors.append(f"{where}: replaces {ex.replaces}, which isn't {where_planned}")
 
 
-def validate_output(raw: str, today: dt.date, plan: TrainingPlan | None) -> LlmOutput:
-    """Parse the model's JSON and check it; raises InvalidOutputError listing every problem."""
+def validate_output(
+    raw: str, today: dt.date, plan: TrainingPlan | None, allowed_letters: str = ""
+) -> LlmOutput:
+    """Parse the model's JSON and check it; raises InvalidOutputError listing every problem.
+    allowed_letters: text whose letters the reply may use even if they aren't Latin (the
+    trainee's name and messages)."""
     try:
         output = LlmOutput.model_validate_json(raw)
     except ValidationError as e:
@@ -163,7 +170,7 @@ def validate_output(raw: str, today: dt.date, plan: TrainingPlan | None) -> LlmO
         errors.append(
             f"reply has {len(output.reply)} characters, WhatsApp allows {MAX_REPLY_CHARS}"
         )
-    if foreign := _foreign_letters(output.reply):
+    if foreign := _foreign_letters(output.reply, allowed_letters):
         errors.append(f"reply contains non-Polish letters {foreign!r}; write only in Polish")
 
     if (weight := output.weight) is not None:

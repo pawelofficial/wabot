@@ -24,15 +24,24 @@ WEEKDAYS_PL = ["poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobo
 
 
 def to_llm_messages(history: list[Message]) -> list[dict]:
-    """Map stored messages (oldest first) to the model's user/assistant turns."""
+    """Map stored messages (oldest first) to the model's user/assistant turns.
+
+    The turns start with the trainee. Bot messages before the trainee's first one (a reminder,
+    a message the bot started) are kept as a developer note, so the model knows what the
+    trainee is answering."""
     turns = []
+    earlier_bot = []
     for msg in history:
-        role = "user" if msg.direction == "in" else "assistant"
         text = msg.body if msg.body else f"[wiadomość typu {msg.type}]"
-        turns.append({"role": role, "content": text})
-    # The conversation must start with the trainee.
-    while turns and turns[0]["role"] != "user":
-        turns.pop(0)
+        if msg.direction == "in":
+            turns.append({"role": "user", "content": text})
+        elif turns:
+            turns.append({"role": "assistant", "content": text})
+        else:
+            earlier_bot.append(text)
+    if earlier_bot:
+        note = PROMPTS["earlier_bot_messages"].strip() + "\n" + "\n".join(earlier_bot)
+        turns.insert(0, {"role": "developer", "content": note})
     return turns
 
 
@@ -105,7 +114,8 @@ def _complete(
     if not settings.openai_api_key:
         raise MissingApiKeyError("OPENAI_API_KEY is not set in .env")
 
-    client = openai.OpenAI(api_key=settings.openai_api_key)
+    # The SDK default is 10 minutes and 2 retries; the trainee is waiting for the reply.
+    client = openai.OpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1)
     messages = list(messages)
     for attempt in range(1, ATTEMPTS + 1):
         response = client.responses.create(
@@ -135,7 +145,10 @@ def _complete(
         if not raw:
             raise RuntimeError(f"Empty response ({response.status}: {response.incomplete_details})")
         try:
-            return llm_output.validate_output(raw, today, plan)
+            # Letters from the instructions (the trainee's name) and the chat are allowed in
+            # the reply even when they aren't Latin, e.g. a Ukrainian name.
+            seen = instructions + "".join(str(m["content"]) for m in messages)
+            return llm_output.validate_output(raw, today, plan, allowed_letters=seen)
         except llm_output.InvalidOutputError as e:
             log.warning("Invalid LLM output (attempt %d/%d): %s", attempt, ATTEMPTS, e)
             if attempt == ATTEMPTS:

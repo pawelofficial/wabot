@@ -28,6 +28,7 @@ DONE = {
     "podopiecznego.",
     "restored": "Przywrócono wcześniejszy plan. Yanek korzysta z niego od następnej wiadomości "
     "podopiecznego.",
+    "already_assigned": "Podopieczny ma już ten plan z biblioteki, bez zmian. Nic nie zapisano.",
     "to_library": "Zapisano plan w bibliotece.",
     "deleted": "Usunięto plan z biblioteki. Podopieczni, którym go przypisano, mają go nadal.",
 }
@@ -38,24 +39,25 @@ def trainee_page(trainee: Trainee, done: str | None = None) -> RedirectResponse:
     return RedirectResponse(f"/dashboard/trainees/{trainee.id}/plan{query}", 303)
 
 
-def current_versions(session, trainer: Trainer) -> dict[int, TraineePlan]:
-    """The current plan version of each of the trainer's trainees (who has which library plan)."""
+def users_of(session, trainer: Trainer) -> dict[int, list[tuple[Trainee, bool]]]:
+    """Per library plan: the trainer's trainees whose current plan came from it, and whether it
+    was edited since. Only trainees who are the trainer's now (one moved to another trainer
+    keeps their old versions, which mustn't show them here)."""
     newest = (
         select(func.max(TraineePlan.id))
-        .where(TraineePlan.trainer_id == trainer.id)
+        .join(Trainee, Trainee.id == TraineePlan.trainee_id)
+        .where(TraineePlan.trainer_id == trainer.id, Trainee.trainer_id == trainer.id)
         .group_by(TraineePlan.trainee_id)
     )
-    rows = session.scalars(select(TraineePlan).where(TraineePlan.id.in_(newest)))
-    return {v.trainee_id: v for v in rows}
-
-
-def users_of(session, trainer: Trainer) -> dict[int, list[tuple[Trainee, bool]]]:
-    """Per library plan: the trainees whose current plan came from it, and whether it was
-    edited since."""
+    rows = session.execute(
+        select(TraineePlan, Trainee)
+        .join(Trainee, Trainee.id == TraineePlan.trainee_id)
+        .where(TraineePlan.id.in_(newest), Trainee.training_plan.is_not(None))
+        .order_by(Trainee.name)
+    )
     users: dict[int, list] = {}
-    for version in current_versions(session, trainer).values():
-        trainee = session.get(Trainee, version.trainee_id)
-        if version.template_id is not None and trainee.training_plan is not None:
+    for version, trainee in rows:
+        if version.template_id is not None:
             users.setdefault(version.template_id, []).append((trainee, version.source == "edited"))
     return users
 
@@ -202,9 +204,9 @@ def assign_library_plan(
     if template is None or template.trainer_id != trainer.id:
         raise HTTPException(404)
     plan = TrainingPlan.model_validate(template.plan)
-    plan_history.assign(session, trainee, plan, "template", template)
+    version = plan_history.assign(session, trainee, plan, "template", template)
     session.commit()
-    return trainee_page(trainee, "assigned")
+    return trainee_page(trainee, "assigned" if version else "already_assigned")
 
 
 @router.post("/trainees/{trainee_id}/plan/to-library")
@@ -248,7 +250,9 @@ def plan_version(
         "plan",
         version=version,
         plan=TrainingPlan.model_validate(version.plan),
-        is_current=current is version and trainee.training_plan is not None,
+        is_current=current is not None
+        and current.id == version.id
+        and trainee.training_plan is not None,
         sources=plan_history.SOURCES,
         catalog=exercises.BY_ID,
     )
@@ -258,9 +262,9 @@ def plan_version(
 def restore_version(
     session: SessionDep, trainer: TrainerDep, trainee: TraineeDep, version: VersionDep
 ):
-    plan_history.restore(session, trainee, version)
+    restored = plan_history.restore(session, trainee, version)
     session.commit()
-    return trainee_page(trainee, "restored")
+    return trainee_page(trainee, "restored" if restored else "unchanged")
 
 
 # The plan library

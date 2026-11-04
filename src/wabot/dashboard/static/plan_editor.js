@@ -6,7 +6,8 @@
   if (!form) return;
   const days = form.querySelector("[data-days]");
   const clone = (name) => form.querySelector(`template[data-${name}-template]`).content.firstElementChild.cloneNode(true);
-  let dirty = false;
+  // Shown again after a failed save: what's in the form isn't saved yet.
+  let dirty = form.hasAttribute("data-unsaved");
 
   // The notes box grows with its text (up to about 25 lines, then it scrolls).
   const notes = form.querySelector("[data-field=notes]");

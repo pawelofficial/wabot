@@ -32,10 +32,15 @@ def assign(
     plan: TrainingPlan,
     source: str,
     template: PlanTemplate | None = None,
-    name: str | None = None,
+    based_on: TraineePlan | None = None,
 ) -> TraineePlan | None:
-    """Make `plan` the trainee's current plan, as a new version. An edit that changes nothing
-    adds no version (returns None). The caller commits."""
+    """Make `plan` the trainee's current plan, as a new version. The version is linked to
+    `template` (a library plan), or keeps the library link and name of `based_on` (an earlier
+    version; for an edit, the current one).
+
+    Nothing changes (returns None) when the trainee already has exactly this plan, with the
+    same link: an edit without changes, restoring a version equal to the current plan,
+    assigning the library plan they already have. The caller commits."""
     if source not in SOURCES:
         raise ValueError(f"unknown plan source {source!r}")
     # A trainee being registered gets its id, a changed trainer its trainer_id.
@@ -43,14 +48,23 @@ def assign(
     session.flush()
     data = plans.to_db(plan)
     current = current_version(session, trainee)
-    if source == "edited" and current is not None and current.plan == data:
-        return None
-    template_id = template.id if template else None
+    if source == "edited":
+        based_on = current
     if template is not None:
-        name = template.name
-    elif source == "edited" and current is not None:
-        # An edited plan is still based on the same library plan.
-        template_id, name = current.template_id, current.name
+        template_id, name = template.id, template.name
+    elif based_on is not None:
+        # An edited or restored plan is still based on the same library plan.
+        template_id, name = based_on.template_id, based_on.name
+    else:
+        template_id = name = None
+    unchanged = (
+        current is not None
+        and trainee.training_plan == data
+        and current.plan == data
+        and (current.template_id, current.name) == (template_id, name)
+    )
+    if unchanged:
+        return None
     version = TraineePlan(
         trainer_id=trainee.trainer_id,
         trainee_id=trainee.id,
@@ -65,12 +79,11 @@ def assign(
     return version
 
 
-def restore(session: Session, trainee: Trainee, version: TraineePlan) -> TraineePlan:
+def restore(session: Session, trainee: Trainee, version: TraineePlan) -> TraineePlan | None:
     """An earlier version becomes the current plan again (as a new version; nothing is
-    removed)."""
-    new = assign(session, trainee, TrainingPlan.model_validate(version.plan), "restored")
-    new.template_id, new.name = version.template_id, version.name
-    return new
+    removed). None if it's the same as the current plan."""
+    plan = TrainingPlan.model_validate(version.plan)
+    return assign(session, trainee, plan, "restored", based_on=version)
 
 
 def history(session: Session, trainee: Trainee) -> list[TraineePlan]:
@@ -88,9 +101,13 @@ def history(session: Session, trainee: Trainee) -> list[TraineePlan]:
 
 
 def current_version(session: Session, trainee: Trainee) -> TraineePlan | None:
+    """The trainee's newest version (with the trainee's current trainer, like history())."""
     return session.scalars(
         select(TraineePlan)
-        .where(TraineePlan.trainee_id == trainee.id)
+        .where(
+            TraineePlan.trainee_id == trainee.id,
+            TraineePlan.trainer_id == trainee.trainer_id,
+        )
         .order_by(TraineePlan.id.desc())
         .limit(1)
     ).first()

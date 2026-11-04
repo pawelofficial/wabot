@@ -71,7 +71,7 @@
 </div>
 {% endif %}
 
-<form method="post" class="plan-editor" data-plan-editor>
+<form method="post" class="plan-editor" data-plan-editor{% if errors %} data-unsaved{% endif %}>
   <input type="hidden" name="plan">
   <section class="card">
     {% if library %}

@@ -16,7 +16,7 @@
       <tr>
         <td><a href="/dashboard/plans/{{ t.id }}">{{ t.name }}</a></td>
         <td class="muted">{{ t.plan["days"]|length|pl_count("dzień", "dni", "dni") }}: {{ t.plan["days"]|map(attribute="name")|join(", ") }}</td>
-        <td class="nowrap">{{ t.updated_at|pl_datetime("Europe/Warsaw") }}</td>
+        <td class="nowrap">{{ t.updated_at|pl_datetime(default_timezone) }}</td>
         <td>
           {% for trainee, edited in users.get(t.id, []) %}<a class="chip" href="/dashboard/trainees/{{ trainee.id }}/plan">{{ trainee.name }}{% if edited %} (zmieniony){% endif %}</a>{% else %}<span class="muted">–</span>{% endfor %}
         </td>

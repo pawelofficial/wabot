@@ -19,6 +19,14 @@ os.environ.update(
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from wabot import config  # noqa: E402
+
+# Tests don't read .env: what they run with mustn't depend on the developer's local settings
+# (HISTORY_MODE, DAILY_UPDATES_ONLY, GOOGLE_CLIENT_ID, ...). Only the values above and the code's
+# defaults apply.
+for _settings_class in (config.DatabaseSettings, config.Settings):
+    _settings_class.model_config["env_file"] = None
+
 from wabot.db import engine  # noqa: E402
 from wabot.main import app  # noqa: E402
 from wabot.models import Base  # noqa: E402

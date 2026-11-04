@@ -96,7 +96,8 @@ def main(argv: list[str] | None = None) -> None:
                 timezone=DEFAULT_TIMEZONE,
             )
             session.add(trainee)
-            plan_history.assign(session, trainee, plan, "script")
+            if not args.no_plan:
+                plan_history.assign(session, trainee, plan, "script")
         elif args.trainer:
             trainee.trainer = trainees.trainer_named(session, args.trainer)
         if args.name:

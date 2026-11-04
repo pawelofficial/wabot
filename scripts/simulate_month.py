@@ -62,7 +62,12 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.db.name.startswith("wabot.db"):
         sys.exit("Use another file than wabot.db: this database is recreated.")
-    args.db.unlink(missing_ok=True)
+    # With the WAL files too: a leftover -wal could be replayed into the new database.
+    for path in (args.db, Path(f"{args.db}-wal"), Path(f"{args.db}-shm")):
+        try:
+            path.unlink(missing_ok=True)
+        except PermissionError:
+            sys.exit(f"{path} is in use – stop the dashboard (run_dashboard.sh) first.")
     # Before wabot is imported: the engine is created at import time; this overrides .env.
     os.environ["DATABASE_URL"] = f"sqlite:///{args.db}"
 

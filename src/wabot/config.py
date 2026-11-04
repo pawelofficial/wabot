@@ -1,6 +1,8 @@
+import os
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -51,6 +53,13 @@ class Settings(DatabaseSettings):
     google_client_id: str = ""
     # Local development only: the login page lists the trainers to sign in as, no Google.
     dashboard_dev_login: bool = False
+
+    @model_validator(mode="after")
+    def _no_dev_login_in_production(self):
+        # Cloud Run sets K_SERVICE. The dev login lets anyone sign in as any trainer.
+        if self.dashboard_dev_login and os.environ.get("K_SERVICE"):
+            raise ValueError("DASHBOARD_DEV_LOGIN must not be on in production (Cloud Run)")
+        return self
 
 
 @lru_cache

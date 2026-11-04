@@ -118,6 +118,11 @@ new_messages_marker: |
   Wiadomości poniżej podopieczny wysłał po Twojej ostatniej wiadomości. Tylko z nich wyciągaj nowe
   dane; to, co wyżej, jest kontekstem.
 
+# Put before the chat history when it starts with the bot's own messages (a reminder, a message
+# the bot started), followed by those messages, so the model sees what the trainee answers.
+earlier_bot_messages: |
+  Wcześniej, przed wiadomościami poniżej, napisałeś do podopiecznego:
+
 # Appended to `system` per trainee, before the plan; {trainee_name} is the name the trainer
 # registered (trainees.name).
 trainee_name: |

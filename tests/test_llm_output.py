@@ -94,6 +94,14 @@ def test_polish_letters_emoji_and_formatting_are_fine():
     assert validate_output(json.dumps(output(reply=reply)), TODAY, None).reply == reply
 
 
+def test_letters_of_the_trainees_name_and_messages_are_fine():
+    raw = json.dumps(output(reply="Dzięki, Олена! Zapisałam."))
+    with pytest.raises(InvalidOutputError, match="non-Polish letters"):
+        validate_output(raw, TODAY, None)
+    # The trainee's name (in the instructions) has those letters.
+    assert validate_output(raw, TODAY, None, allowed_letters="ma na imię Олена").reply
+
+
 def test_nothing_reported_is_valid():
     assert validate_output(json.dumps(output()), TODAY, None).weight is None
 

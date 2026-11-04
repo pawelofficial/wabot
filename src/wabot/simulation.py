@@ -173,7 +173,7 @@ def canned_llm():
     llm = SimpleNamespace(answers=[], requests=[])
 
     class CannedOpenAI:
-        def __init__(self, api_key):
+        def __init__(self, **options):
             self.responses = self
 
         def create(self, **request):

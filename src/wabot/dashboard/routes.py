@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from wabot import trainees
 from wabot.dashboard import auth, queries
 from wabot.dashboard.auth import SessionDep, SettingsDep, TraineeDep, TrainerDep
-from wabot.models import Trainee, Trainer
+from wabot.models import DEFAULT_TIMEZONE, Trainee, Trainer
 
 HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
@@ -60,6 +60,8 @@ templates.env.filters["pl_date"] = pl_date
 templates.env.filters["pl_kg"] = pl_kg
 templates.env.filters["pl_datetime"] = pl_datetime
 templates.env.filters["pl_count"] = pl_count
+# Trainers have no timezone of their own yet; their times are shown in this one.
+templates.env.globals["default_timezone"] = DEFAULT_TIMEZONE
 router = APIRouter(prefix="/dashboard", default_response_class=HTMLResponse)
 
 # The trainee pages in the sidebar: (URL part, label, icon).

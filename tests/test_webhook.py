@@ -210,6 +210,11 @@ def test_llm_turns_start_with_the_trainee():
         Message(direction="in", phone="1", type="image", body=None),
     ]
     assert assistant.to_llm_messages(history) == [
+        {
+            "role": "developer",
+            "content": assistant.PROMPTS["earlier_bot_messages"].strip()
+            + "\n[wiadomość typu template]",
+        },
         {"role": "user", "content": "hej"},
         {"role": "assistant", "content": "Cześć!"},
         {"role": "user", "content": "[wiadomość typu image]"},

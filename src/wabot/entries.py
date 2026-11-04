@@ -18,7 +18,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from wabot.llm_output import LlmOutput, Training, Weight
-from wabot.models import Message, Trainee, TrainingCheckin, TrainingExercise, WeightEntry
+from wabot.models import (
+    Message,
+    Trainee,
+    TrainingCheckin,
+    TrainingExercise,
+    WeightEntry,
+    utcnow,
+)
 
 
 def save(
@@ -27,13 +34,16 @@ def save(
     message: Message,
     output: LlmOutput,
     daily_updates_only: bool = False,
+    now: dt.datetime | None = None,
 ) -> None:
     """Save the weight and training in output, reported in message (the one the bot answers).
-    daily_updates_only: update the day's entry instead of adding a new one."""
+    daily_updates_only: update the day's entry instead of adding a new one. now: when it's
+    saved, the current time if not given (the simulation passes its simulated time)."""
+    now = now or utcnow()
     if output.weight is not None:
-        _save_weight(session, trainee, message, output.weight, daily_updates_only)
+        _save_weight(session, trainee, message, output.weight, daily_updates_only, now)
     if output.training is not None:
-        _save_training(session, trainee, message, output.training, daily_updates_only)
+        _save_training(session, trainee, message, output.training, daily_updates_only, now)
     session.commit()
 
 
@@ -62,21 +72,38 @@ def _entry_to_fill(
     message: Message,
     day: dt.date,
     daily_updates_only: bool,
+    now: dt.datetime,
 ):
     """The row to write the report into, or None to leave the day as it is."""
     if daily_updates_only:
         entry = _entry_for_day(session, model, trainee, day)
         if entry is not None:
-            return None if _newer_report_saved(entry, message) else entry
-    entry = model(trainer_id=trainee.trainer_id, trainee_id=trainee.id, date=day)
+            if _newer_report_saved(entry, message):
+                return None
+            entry.updated_at = now
+            return entry
+    entry = model(
+        trainer_id=trainee.trainer_id,
+        trainee_id=trainee.id,
+        date=day,
+        created_at=now,
+        updated_at=now,
+    )
     session.add(entry)
     return entry
 
 
 def _save_weight(
-    session: Session, trainee: Trainee, message: Message, weight: Weight, daily_updates_only: bool
+    session: Session,
+    trainee: Trainee,
+    message: Message,
+    weight: Weight,
+    daily_updates_only: bool,
+    now: dt.datetime,
 ) -> None:
-    entry = _entry_to_fill(session, WeightEntry, trainee, message, weight.date, daily_updates_only)
+    entry = _entry_to_fill(
+        session, WeightEntry, trainee, message, weight.date, daily_updates_only, now
+    )
     if entry is None:
         return
     entry.kg = weight.kg
@@ -89,9 +116,10 @@ def _save_training(
     message: Message,
     training: Training,
     daily_updates_only: bool,
+    now: dt.datetime,
 ) -> None:
     checkin = _entry_to_fill(
-        session, TrainingCheckin, trainee, message, training.date, daily_updates_only
+        session, TrainingCheckin, trainee, message, training.date, daily_updates_only, now
     )
     if checkin is None:
         return

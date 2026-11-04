@@ -11,7 +11,7 @@ from sqlalchemy import select
 from wabot import assistant, conversation, exercises, main, plans, trainees, utils
 from wabot.config import Settings
 from wabot.db import SessionLocal
-from wabot.models import DEFAULT_TIMEZONE, Message, Trainee, utcnow
+from wabot.models import DEFAULT_TIMEZONE, Message, Trainee, TraineePlan, utcnow
 
 from .test_webhook import PHONE, add_trainee, plan_with_day, post_signed, text_payload
 
@@ -307,6 +307,15 @@ def test_without_a_bot_message_everything_is_new_and_unmarked(mode):
     assert [t["content"] for t in turns] == ["82", "yanek zanotuj"]
 
 
+def test_a_reply_to_a_message_the_bot_started_shows_the_model_that_message():
+    # A reminder is the first message of the window: the model still sees what was asked.
+    history = chat(("out", "Jak dziś z dietą?"), ("in", "yanek dobrze, bez odstępstw"))
+    turns = assistant.reply_input(Settings(), history)
+    assert turns[0]["role"] == "developer" and "Jak dziś z dietą?" in turns[0]["content"]
+    assert is_marker(turns[1])
+    assert turns[2] == {"role": "user", "content": "yanek dobrze, bez odstępstw"}
+
+
 def test_reply_call_sends_the_marked_history(monkeypatch):
     sent = {}
 
@@ -378,3 +387,10 @@ def test_add_trainee_sets_the_trainers_email(monkeypatch):
         run_add_trainee(monkeypatch, "--phone", "48999888777", "--trainer-email", "marek@gmail.com")
     with pytest.raises(SystemExit, match="not an email"):
         run_add_trainee(monkeypatch, "--phone", PHONE, "--trainer-email", "marek")
+
+
+def test_add_trainee_without_a_plan_leaves_no_plan_in_the_history(monkeypatch):
+    run_add_trainee(monkeypatch, "--phone", PHONE, "--no-plan")
+    with SessionLocal() as session:
+        assert session.scalar(select(Trainee)).training_plan is None
+        assert session.scalars(select(TraineePlan)).all() == []

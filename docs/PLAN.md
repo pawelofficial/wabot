@@ -8,7 +8,7 @@ A WhatsApp assistant for personal trainers. Trainees report weight, training and
 |---|---|
 | Tenancy | Many trainers; each sees only their own trainees |
 | Language | Polish (bot replies, reminder templates, dashboard) |
-| Trainee plans | Free text per trainee (training plan, diet plan, notes), written by the trainer in the dashboard |
+| Trainee plans | Training plans built from the exercise catalog (days, exercises, allowed replacements, notes), edited in the dashboard and kept as versions; diet plan and notes free text (later) |
 | Reminders | Yes – the bot messages trainees on a schedule |
 | Missed reports | Trainer sees them on the dashboard; no alerts |
 | Trainer interface | Dashboard only (trainers don't chat with the bot) |
@@ -149,7 +149,7 @@ A month view per trainee. Each day shows the newest training check-in of that da
 | WhatsApp | Meta WhatsApp Cloud API (direct) |
 | Bot + dashboard | Python, FastAPI on Cloud Run (`europe-central2`) |
 | Async processing | Webhook verifies signature, stores message (unique `wamid` = dedup), acks 200, enqueues Cloud Task |
-| AI | OpenAI Python SDK (Responses API), tool use; default model `gpt-5.6-luna` (switched from Anthropic on 2026-11-01 – existing OpenAI credit; from `gpt-5.4-mini` to Luna on 2026-11-03 – about 4x cheaper and as good in tests) |
+| AI | OpenAI Python SDK (Responses API), structured output (read tools still open); default model `gpt-5.6-luna` (switched from Anthropic on 2026-11-01 – existing OpenAI credit; from `gpt-5.4-mini` to Luna on 2026-11-03 – about 4x cheaper and as good in tests) |
 | Database | Cloud SQL Postgres, SQLAlchemy + Alembic |
 | Files | Cloud Storage (photos) |
 | Scheduling | Cloud Scheduler → reminders endpoint |
@@ -159,7 +159,7 @@ A month view per trainee. Each day shows the newest training check-in of that da
 
 ### Core data model
 
-`trainers` → `plan_templates` (the trainer's plan library) and `trainees` (phone, name, timezone, consent_date, training_plan; diet_plan and notes later) → `trainee_plans` (every version of the plan), → `weight_entries` (date, kg), `training_checkins` (date, plan_day, status, missed_exercises, notes) with `training_exercises`, later `diet_checkins`, `photos`, `reminder_schedules`; and `messages` (inbound and outbound, used as chat history and for dedup). Every trainee-owned row also carries `trainer_id`; exercise rows are reached only through their check-in, which carries it. Each entry keeps `message_id`, the trainee's message the bot answered when saving it, so the dashboard can show the original next to the entry. Built so far (2026-11-03): trainers, trainees, messages, weight_entries, training_checkins, training_exercises.
+`trainers` → `plan_templates` (the trainer's plan library) and `trainees` (phone, name, timezone, consent_date, training_plan; diet_plan and notes later) → `trainee_plans` (every version of the plan), → `weight_entries` (date, kg), `training_checkins` (date, plan_day, status, missed_exercises, notes) with `training_exercises`, later `diet_checkins`, `photos`, `reminder_schedules`; and `messages` (inbound and outbound, used as chat history and for dedup). Every trainee-owned row also carries `trainer_id`; exercise rows are reached only through their check-in, which carries it. Each entry keeps `message_id`, the trainee's message the bot answered when saving it, so the dashboard can show the original next to the entry. Built so far (2026-11-04): trainers, trainees, messages, weight_entries, training_checkins, training_exercises, plan_templates, trainee_plans.
 
 ## Out of scope for now
 
@@ -172,7 +172,7 @@ A month view per trainee. Each day shows the newest training check-in of that da
 
 The goal is the smallest version that a trainer can use with real trainees. Where a question came up, the MVP takes the simplest answer:
 
-- **Trainer accounts** are created by hand by the operator (a small CLI command plus a Firebase Auth user). No sign-up page.
+- **Trainer accounts** are created by hand by the operator (`scripts/add_trainee.py --trainer-email`; the trainer signs in with that Google account). No sign-up page.
 - **Chat history** sent to the LLM is the trainee's last 20 messages from the past 24 h.
 - **Corrections:** a newer report for the day is the current value; the older one is kept as a row (see "The LLM's role").
 - **Missed reports:** the dashboard shows the date of each trainee's last weight, training and diet report, and highlights any older than a few days. There are no rules tied to the reminder schedule.
