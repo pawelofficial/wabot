@@ -21,6 +21,9 @@ if [[ ! -f "$DB" ]]; then
     uv run python scripts/simulate_month.py --canned >/dev/null
 fi
 
+# An older database gets the new tables (its data stays).
+DATABASE_URL="sqlite:///$DB" uv run alembic upgrade head
+
 echo "Dashboard on $DB: http://localhost:$PORT/dashboard"
 DATABASE_URL="sqlite:///$DB" DASHBOARD_DEV_LOGIN=true \
     uv run uvicorn wabot.main:app --reload --reload-include "*.html" --reload-include "*.css" \

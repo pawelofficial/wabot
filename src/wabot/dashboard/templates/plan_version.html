@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "_plan.html" import plan_cards, version_label with context %}
+{% block title %}Plan z {{ version.created_at|pl_datetime(trainee.timezone) }} – {{ trainee.name }}{% endblock %}
+{% block heading %}Plan treningowy – {{ trainee.name }}{% endblock %}
+{% block actions %}
+<a class="button" href="/dashboard/trainees/{{ trainee.id }}/plan">← Obecny plan</a>
+{% endblock %}
+{% block content %}
+<section class="card plan-bar">
+  <div>
+    <div class="tile-label">{{ "Obecny plan" if is_current else "Wcześniejszy plan" }}</div>
+    <div class="plan-bar-name">{{ version_label(version, sources) }}</div>
+    <div class="muted small">od {{ version.created_at|pl_datetime(trainee.timezone) }}</div>
+  </div>
+  {% if not is_current %}
+  <form method="post" action="/dashboard/trainees/{{ trainee.id }}/plan/versions/{{ version.id }}/restore" data-confirm="Przywrócić ten plan jako obecny?">
+    <button type="submit" class="button primary">Przywróć ten plan</button>
+  </form>
+  {% endif %}
+</section>
+{{ plan_cards(plan) }}
+{% endblock %}

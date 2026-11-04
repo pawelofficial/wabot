@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "_plan.html" import plan_cards with context %}
+{% block title %}{{ library_plan.name }} – Biblioteka planów{% endblock %}
+{% block heading %}{{ library_plan.name }}{% endblock %}
+{% block actions %}
+<a class="button" href="/dashboard/plans">← Biblioteka</a>
+<a class="button" href="/dashboard/plans/{{ library_plan.id }}/edit">✎ Edytuj</a>
+{% endblock %}
+{% block content %}
+<section class="card plan-bar">
+  <div>
+    <div class="tile-label">Podopieczni z tym planem</div>
+    <div>
+      {% for trainee, edited in users %}<a class="chip" href="/dashboard/trainees/{{ trainee.id }}/plan">{{ trainee.name }}{% if edited %} (zmieniony){% endif %}</a>{% else %}<span class="muted">nikt</span>{% endfor %}
+    </div>
+    <div class="muted small">Zmiany tego planu nie zmieniają planów, które podopieczni już dostali. Przypisujesz go w zakładce „Plan treningowy” podopiecznego.</div>
+  </div>
+  <form method="post" action="/dashboard/plans/{{ library_plan.id }}/delete" data-confirm="Usunąć „{{ library_plan.name }}” z biblioteki? Podopieczni, którym go przypisano, zachowają swój plan.">
+    <button type="submit" class="button danger">Usuń z biblioteki</button>
+  </form>
+</section>
+{{ plan_cards(plan) }}
+{% endblock %}

@@ -4,6 +4,7 @@ the trainee dropdown). install() adds them to the FastAPI app in main.py."""
 import datetime as dt
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -30,6 +31,23 @@ def pl_date(day: dt.date, weekday: bool = False) -> str:
     return f"{WEEKDAYS[day.weekday()]} {text}" if weekday else text
 
 
+def pl_datetime(moment: dt.datetime, timezone: str) -> str:
+    """5 paź 2026, 18:30 in the given timezone."""
+    local = moment.astimezone(ZoneInfo(timezone))
+    return f"{pl_date(local.date())}, {local:%H:%M}"
+
+
+def pl_count(n: int, one: str, few: str, many: str) -> str:
+    """1 ćwiczenie, 3 ćwiczenia, 5 ćwiczeń (Polish plural forms)."""
+    if n == 1:
+        word = one
+    elif n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        word = few
+    else:
+        word = many
+    return f"{n} {word}"
+
+
 def pl_kg(kg: float, signed: bool = False) -> str:
     """82,4 kg; signed=True: +0,4 kg / −1,2 kg (a real minus sign)."""
     text = f"{abs(kg) if signed else kg:.1f}".replace(".", ",") + " kg"
@@ -40,6 +58,8 @@ def pl_kg(kg: float, signed: bool = False) -> str:
 
 templates.env.filters["pl_date"] = pl_date
 templates.env.filters["pl_kg"] = pl_kg
+templates.env.filters["pl_datetime"] = pl_datetime
+templates.env.filters["pl_count"] = pl_count
 router = APIRouter(prefix="/dashboard", default_response_class=HTMLResponse)
 
 # The trainee pages in the sidebar: (URL part, label, icon).
@@ -51,7 +71,10 @@ TRAINEE_SECTIONS = [
 
 
 def install(app: FastAPI) -> None:
+    from wabot.dashboard import plan_pages  # it uses render() from here
+
     app.include_router(router)
+    app.include_router(plan_pages.router)
     app.mount("/dashboard/static", StaticFiles(directory=HERE / "static"), name="static")
     # A page that needs a signed-in trainer, without one: go to the login page.
     app.add_exception_handler(
@@ -115,11 +138,6 @@ def weight(request: Request, session: SessionDep, trainer: TrainerDep, trainee: 
 @router.get("/trainees/{trainee_id}/trainings")
 def trainings(request: Request, session: SessionDep, trainer: TrainerDep, trainee: TraineeDep):
     return render(request, "trainings.html", session, trainer, trainee, "trainings")
-
-
-@router.get("/trainees/{trainee_id}/plan")
-def plan(request: Request, session: SessionDep, trainer: TrainerDep, trainee: TraineeDep):
-    return render(request, "plan.html", session, trainer, trainee, "plan")
 
 
 def login_page_response(

@@ -19,13 +19,16 @@ from unittest import mock
 from zoneinfo import ZoneInfo
 
 import yaml
+from sqlalchemy import select
 
-from wabot import assistant, conversation, exercises, main, plans, trainees
+from wabot import assistant, conversation, exercises, main, plan_history, plans, trainees
 from wabot.db import SessionLocal
-from wabot.models import Message, Trainee
+from wabot.models import Message, PlanTemplate, Trainee
 from wabot.plans import TrainingPlan
 
 SCENARIOS = Path("scenarios")
+# When the simulated trainers set up their plans: before the first report (1 Oct, Warsaw).
+PLANS_SET_UP_AT = dt.datetime(2026, 9, 30, 12, 0, tzinfo=dt.UTC)
 
 
 @dataclass
@@ -38,6 +41,7 @@ class Scenario:
     trainer_email: str
     phone: str
     plan_path: Path
+    plan_name: str  # the plan's name in the trainer's library
     reports: list[dict]
     timezone: str = "Europe/Warsaw"
 
@@ -60,6 +64,7 @@ def load(path: Path) -> Scenario:
         trainer_email=data["trainer_email"],
         phone=str(data["phone"]),
         plan_path=Path(data["plan"]),
+        plan_name=data["plan_name"],
         reports=data["reports"],
     )
 
@@ -75,7 +80,8 @@ def timeline(scenarios: list[Scenario]) -> list[tuple[dt.datetime, Scenario, dic
 
 
 def register(scenario: Scenario) -> Trainee:
-    """Add the scenario's trainee (and trainer) with their plan."""
+    """Add the scenario's trainee (and trainer), put their plan into the trainer's library and
+    assign it from there, as a trainer would in the dashboard."""
     with SessionLocal() as session:
         trainer = trainees.trainer_named(session, scenario.trainer)
         email = trainees.normalize_email(scenario.trainer_email)
@@ -88,9 +94,28 @@ def register(scenario: Scenario) -> Trainee:
             name=scenario.name,
             timezone=scenario.timezone,
             consent_date=dt.date(2026, 10, 1),
-            training_plan=plans.to_db(scenario.plan),
         )
         session.add(trainee)
+        session.flush()
+        template = session.scalars(
+            select(PlanTemplate).where(
+                PlanTemplate.trainer_id == trainer.id, PlanTemplate.name == scenario.plan_name
+            )
+        ).first()
+        if template is None:
+            template = PlanTemplate(
+                trainer_id=trainer.id,
+                name=scenario.plan_name,
+                plan=plans.to_db(scenario.plan),
+                created_at=PLANS_SET_UP_AT,
+                updated_at=PLANS_SET_UP_AT,
+            )
+            session.add(template)
+            session.flush()
+        elif template.plan != plans.to_db(scenario.plan):
+            raise ValueError(f"{scenario.key}: {scenario.plan_name} is another plan already")
+        version = plan_history.assign(session, trainee, scenario.plan, "template", template)
+        version.created_at = PLANS_SET_UP_AT
         session.commit()
         return trainee
 

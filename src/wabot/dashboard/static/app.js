@@ -34,3 +34,9 @@ for (const item of document.querySelectorAll("nav .disabled")) {
     }
   });
 }
+
+// Forms with data-confirm="question" ask before they're sent (an empty one doesn't ask).
+document.addEventListener("submit", (event) => {
+  const question = event.target.dataset?.confirm;
+  if (question && !confirm(question)) event.preventDefault();
+});

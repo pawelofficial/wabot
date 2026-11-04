@@ -8,6 +8,9 @@
   --accent-soft: #e3f2ec;
   /* Chart line: validated (dataviz validator) against --surface in each mode. */
   --chart-line: #0e8a5c;
+  --on-accent: #ffffff;
+  --error: #b42318;
+  --error-soft: #fdecea;
   --sidebar-width: 240px;
   --sidebar-folded: 64px;
   color-scheme: light;
@@ -22,6 +25,9 @@
     --accent: #5cc49d;
     --accent-soft: #1d3a30;
     --chart-line: #3aa87f;
+    --on-accent: #0d1a14;
+    --error: #f97066;
+    --error-soft: #3a1d1b;
     color-scheme: dark;
   }
 }
@@ -178,10 +184,123 @@ body.login { align-items: center; justify-content: center; padding: 16px; }
 .login-box h1 { margin-top: 0; }
 .login-box h2 { font-size: 15px; margin: 24px 0 4px; }
 .muted { color: var(--muted); font-weight: 400; }
-.error { color: #b42318; }
-@media (prefers-color-scheme: dark) { .error { color: #f97066; } }
+.error { color: var(--error); }
 .login-box button {
   width: 100%; margin-top: 8px; padding: 10px; cursor: pointer;
   background: var(--accent-soft); color: var(--accent);
   border: 1px solid var(--border); border-radius: 8px; font-weight: 600;
 }
+
+/* Buttons and messages */
+.topbar-actions { margin-left: auto; display: flex; gap: 8px; }
+.button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; cursor: pointer;
+  background: var(--surface); color: var(--text); text-decoration: none; font: inherit; font-size: 14px;
+  border: 1px solid var(--border); border-radius: 8px; white-space: nowrap;
+}
+.button:hover { background: var(--bg); }
+.button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.button.primary:hover { filter: brightness(1.08); }
+.notice {
+  padding: 10px 14px; margin: 0 0 16px; border-radius: 8px;
+  background: var(--accent-soft); color: var(--text); border: 1px solid var(--border);
+}
+.error-box {
+  padding: 10px 14px; margin: 0 0 16px; border-radius: 8px;
+  background: var(--error-soft); border: 1px solid var(--error); color: var(--text);
+}
+.error-box ul { margin: 4px 0 0; padding-left: 20px; }
+.small { font-size: 12px; }
+.empty-card p { margin-top: 0; color: var(--muted); }
+.chip {
+  display: inline-flex; align-items: center; gap: 2px; margin: 2px 4px 2px 0; padding: 1px 8px;
+  border-radius: 999px; background: var(--bg); border: 1px solid var(--border); font-size: 13px; white-space: nowrap;
+}
+.chip button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0 0 0 4px; font-size: 15px; line-height: 1; }
+.chip button:hover { color: var(--error); }
+
+/* Plan view */
+.plan-notes { white-space: pre-line; margin: 8px 0 0; }
+.plan-table .exercise { min-width: 180px; }
+
+/* Plan editor */
+.field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); min-width: 0; }
+.field input, .field select, .field textarea, .replacements select {
+  width: 100%; padding: 7px 9px; font: inherit; font-size: 14px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+}
+.field textarea { resize: vertical; }
+.field input:focus, .field select:focus, .field textarea:focus, .replacements select:focus {
+  outline: 2px solid var(--accent); outline-offset: -1px;
+}
+.plan-editor > .card .card-subtitle { margin: 8px 0 0; }
+.plan-day-head { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 12px; }
+.grow { flex: 1; }
+.plan-day-head input { font-size: 16px; font-weight: 600; }
+.plan-exercises { list-style: none; margin: 0 0 12px; padding: 0; counter-reset: exercise; }
+.plan-exercise {
+  position: relative; counter-increment: exercise;
+  display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: end;
+  padding: 12px 0 12px 32px; border-top: 1px solid var(--border);
+}
+.plan-exercise::before {
+  content: counter(exercise); position: absolute; left: 4px; top: 34px;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.exercise-fields {
+  display: grid; gap: 8px;
+  grid-template-columns: minmax(200px, 2.2fr) minmax(64px, 0.6fr) repeat(3, minmax(100px, 1fr));
+}
+.replacements { grid-column: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.replacements select { width: auto; max-width: 220px; padding: 3px 6px; font-size: 13px; }
+.plan-exercise > .row-actions { grid-column: 2; grid-row: 1; }
+.row-actions { display: flex; gap: 2px; }
+.icon-button {
+  width: 32px; height: 32px; border: 1px solid transparent; border-radius: 7px; background: none;
+  cursor: pointer; color: var(--muted); font-size: 15px;
+}
+.icon-button { display: inline-grid; place-items: center; padding: 0; }
+.icon-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.icon-button:hover { background: var(--bg); border-color: var(--border); color: var(--text); }
+.icon-button.danger:hover { color: var(--error); }
+.plan-editor > .button { margin-bottom: 16px; }
+.form-actions {
+  position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  margin: 0 -24px; padding: 12px 24px; background: var(--bg); border-top: 1px solid var(--border);
+}
+@media (max-width: 1100px) {
+  .exercise-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .exercise-field { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .topbar h1 { font-size: 19px; }
+  .plan-exercise { padding-left: 0; grid-template-columns: 1fr; }
+  .plan-exercise::before { content: none; }
+  .plan-exercise > .row-actions { grid-column: 1; grid-row: auto; justify-content: flex-end; }
+  .form-actions { margin: 0 -16px; padding: 12px 16px; }
+}
+.icon-button:focus-visible, .button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.field ::placeholder, .field input::placeholder { color: var(--muted); opacity: 0.6; }
+
+/* Plan page: the current plan's bar, assigning from the library, the history */
+.plan-bar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; }
+.plan-bar-name { font-size: 17px; font-weight: 600; }
+.plan-bar-actions { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.plan-bar-actions.start { align-items: center; }
+.inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.inline-form .field { min-width: 220px; }
+.to-library { position: relative; }
+.to-library summary { list-style: none; }
+.to-library summary::-webkit-details-marker { display: none; }
+.to-library[open] > form, .to-library[open] > p {
+  margin-top: 8px;
+}
+.row-links { display: flex; gap: 12px; align-items: center; }
+.row-links form { margin: 0; }
+.link-button { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; font: inherit; }
+.button.danger { color: var(--error); }
+.button.danger:hover { border-color: var(--error); }
+a.chip { color: var(--text); text-decoration: none; }
+a.chip:hover { border-color: var(--accent); }
+.plan-name { margin-bottom: 12px; }
+.plan-name input { font-size: 16px; font-weight: 600; }

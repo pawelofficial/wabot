@@ -2,7 +2,8 @@
 
 The session is a signed cookie holding the trainer's ID. Every dashboard page depends on
 `current_trainer` (no valid cookie: redirect to the login page), and every trainee page on
-`trainee_of_trainer` (a trainee of another trainer: 404, as if it didn't exist). Pages take the
+`trainee_of_trainer` (a trainee of another trainer: 404, as if it didn't exist; the same for library
+plans, `template_of_trainer`, and plan versions, `version_of_trainee`). Pages take the
 trainer from these, never from the URL or a form, so one trainer can't reach another's data.
 
 Signing in: with Google (GOOGLE_CLIENT_ID): Google's button on the login page gives the browser
@@ -22,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from wabot.config import Settings, get_settings
 from wabot.db import get_session
-from wabot.models import Trainee, Trainer
+from wabot.models import PlanTemplate, Trainee, TraineePlan, Trainer
 
 COOKIE = "wabot_session"
 MAX_AGE = 30 * 24 * 3600  # signed in for 30 days
@@ -103,3 +104,29 @@ def trainee_of_trainer(trainee_id: int, trainer: TrainerDep, session: SessionDep
 
 
 TraineeDep = Annotated[Trainee, Depends(trainee_of_trainer)]
+
+
+def template_of_trainer(template_id: int, trainer: TrainerDep, session: SessionDep) -> PlanTemplate:
+    """The library plan in the URL, if it's the signed-in trainer's; 404 otherwise."""
+    template = session.get(PlanTemplate, template_id)
+    if template is None or template.trainer_id != trainer.id:
+        raise HTTPException(404)
+    return template
+
+
+TemplateDep = Annotated[PlanTemplate, Depends(template_of_trainer)]
+
+
+def version_of_trainee(version_id: int, trainee: TraineeDep, session: SessionDep) -> TraineePlan:
+    """A version of the trainee's plan (the history), if it's that trainee's; 404 otherwise."""
+    version = session.get(TraineePlan, version_id)
+    if (
+        version is None
+        or version.trainee_id != trainee.id
+        or version.trainer_id != trainee.trainer_id
+    ):
+        raise HTTPException(404)
+    return version
+
+
+VersionDep = Annotated[TraineePlan, Depends(version_of_trainee)]

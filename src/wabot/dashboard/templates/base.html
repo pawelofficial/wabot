@@ -41,6 +41,9 @@
       <a href="/dashboard" {% if section == "overview" %}class="active" aria-current="page"{% endif %} title="Podopieczni">
         <span class="icon">👥</span><span class="label">Podopieczni</span>
       </a>
+      <a href="/dashboard/plans" {% if section == "library" %}class="active" aria-current="page"{% endif %} title="Biblioteka planów">
+        <span class="icon">📚</span><span class="label">Biblioteka planów</span>
+      </a>
     </nav>
 
     <div class="sidebar-bottom">
@@ -56,6 +59,7 @@
     <header class="topbar">
       <button class="menu-button" type="button" data-open-menu aria-label="Menu">☰</button>
       <h1>{% block heading %}{% endblock %}</h1>
+      <div class="topbar-actions">{% block actions %}{% endblock %}</div>
     </header>
     {% block content %}{% endblock %}
   </main>

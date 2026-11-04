@@ -1,16 +1,19 @@
 """Training plans: days of exercises from the catalog, each with the replacements the trainer
 allows.
 
-A plan is written as YAML (plans/example.yaml; later built in the dashboard from the catalog),
-stored as JSON in trainees.training_plan and checked by the models below. The LLM gets the plan
-as text (`prompt_text()`), with each exercise's ID, catalog name and aliases, so it can map
-"siady" or "suwnica" to an ID without seeing the whole catalog.
+A plan is written as YAML (plans/example.yaml, for scripts/add_trainee.py) or edited in the
+dashboard (dashboard/plan_editor.py), stored as JSON in trainees.training_plan and checked by
+the models below. The LLM gets the plan as text (`prompt_text()`), with each exercise's ID,
+catalog name and aliases, so it can map "siady" or "suwnica" to an ID without seeing the whole
+catalog.
 """
 
 from pathlib import Path
+from typing import Annotated
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic_core import PydanticCustomError
 
 from wabot import exercises
 from wabot.exercises import ExerciseId
@@ -22,9 +25,18 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", coerce_numbers_to_str=True)
 
 
+# The errors below have their own types (pydantic's error "type"), so the dashboard's plan editor
+# can say them in Polish (dashboard/plan_editor.py).
+def _error(kind: str, message: str, **context) -> PydanticCustomError:
+    return PydanticCustomError(kind, message, context)
+
+
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
 class PlanExercise(_Strict):
     id: ExerciseId
-    sets: int | None = None
+    sets: int | None = Field(None, ge=1)
     reps: str | None = None  # "8", "6–8", "10 na nogę", "45 s", "max"
     weight: str | None = None  # as the trainer writes it: "ok. 60 kg", "2 x 16 kg", "lekko"
     note: str | None = None  # "z hantlami", "z gumą"
@@ -34,9 +46,9 @@ class PlanExercise(_Strict):
     @model_validator(mode="after")
     def _check_replacements(self):
         if self.id in self.replacements:
-            raise ValueError(f"{self.id} is listed as its own replacement")
+            raise _error("own_replacement", "{id} is listed as its own replacement", id=self.id)
         if len(set(self.replacements)) != len(self.replacements):
-            raise ValueError(f"{self.id} has a replacement listed twice")
+            raise _error("duplicate_replacement", "{id} has a replacement listed twice", id=self.id)
         return self
 
     def dose(self) -> str:
@@ -48,14 +60,20 @@ class PlanExercise(_Strict):
 
 
 class PlanDay(_Strict):
-    name: str
+    name: Name
     exercises: list[PlanExercise] = Field(min_length=1)
 
     @model_validator(mode="after")
     def _check_exercises(self):
         ids = [e.id for e in self.exercises]
-        if len(set(ids)) != len(ids):
-            raise ValueError(f"{self.name}: an exercise is listed twice")
+        twice = next((i for i in ids if ids.count(i) > 1), None)
+        if twice:
+            raise _error(
+                "duplicate_exercise",
+                "{day}: {id} is listed twice",
+                day=self.name,
+                id=twice,
+            )
         return self
 
 
@@ -67,8 +85,9 @@ class TrainingPlan(_Strict):
     @model_validator(mode="after")
     def _check_days(self):
         names = [_key(d.name) for d in self.days]
-        if len(set(names)) != len(names):
-            raise ValueError("two days have the same name")
+        twice = next((d.name for d in self.days if names.count(_key(d.name)) > 1), None)
+        if twice:
+            raise _error("duplicate_day", "two days have the same name: {name}", name=twice)
         return self
 
     def day(self, name: str) -> PlanDay | None:

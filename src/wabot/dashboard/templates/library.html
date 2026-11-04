@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Biblioteka planów{% endblock %}
+{% block heading %}Biblioteka planów{% endblock %}
+{% block actions %}
+<a class="button primary" href="/dashboard/plans/new">+ Nowy plan</a>
+{% endblock %}
+{% block content %}
+{% if done %}<p class="notice" role="status">{{ done }}</p>{% endif %}
+<p class="muted">Plany niezwiązane z żadnym podopiecznym. Przypisujesz je w zakładce „Plan treningowy” podopiecznego; dostaje on kopię, więc późniejsze zmiany w bibliotece nie zmieniają jego planu.</p>
+{% if templates %}
+<div class="table-scroll">
+  <table class="table">
+    <thead><tr><th>Plan</th><th>Dni</th><th>Zmieniony</th><th>Podopieczni z tym planem</th></tr></thead>
+    <tbody>
+      {% for t in templates %}
+      <tr>
+        <td><a href="/dashboard/plans/{{ t.id }}">{{ t.name }}</a></td>
+        <td class="muted">{{ t.plan["days"]|length|pl_count("dzień", "dni", "dni") }}: {{ t.plan["days"]|map(attribute="name")|join(", ") }}</td>
+        <td class="nowrap">{{ t.updated_at|pl_datetime("Europe/Warsaw") }}</td>
+        <td>
+          {% for trainee, edited in users.get(t.id, []) %}<a class="chip" href="/dashboard/trainees/{{ trainee.id }}/plan">{{ trainee.name }}{% if edited %} (zmieniony){% endif %}</a>{% else %}<span class="muted">–</span>{% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card empty-card">
+  <p>Biblioteka jest pusta. Utwórz plan tutaj albo zapisz w bibliotece plan, który ma już któryś z podopiecznych („Zapisz w bibliotece” w jego planie).</p>
+  <a class="button primary" href="/dashboard/plans/new">+ Nowy plan</a>
+</div>
+{% endif %}
+{% endblock %}

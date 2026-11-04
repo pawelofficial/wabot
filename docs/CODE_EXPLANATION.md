@@ -24,7 +24,10 @@ A walk through what happens at runtime: which function calls which, in what orde
 | `src/wabot/dashboard/routes.py` | The trainers' dashboard pages under `/dashboard` (Flow 6); `install(app)` adds them to the app |
 | `src/wabot/dashboard/auth.py` | Who is signed in (signed session cookie), `current_trainer` and `trainee_of_trainer`: the only place that decides which trainees a trainer may see |
 | `src/wabot/dashboard/queries.py` | What the pages read: `current_per_day()` (the newest row of each day, the rule for every report type), `weigh_ins()` (each day's weight with the message it came from) |
-| `src/wabot/dashboard/templates/`, `static/` | `base.html` (the sidebar with the trainee dropdown) and one template per page; `app.css`, `app.js` (folding the sidebar, the phone drawer, the dropdown, the "Wybierz podopiecznego" hint), `weight_chart.js` (the weight chart, an SVG drawn in the browser) |
+| `src/wabot/plan_history.py` | A trainee's plan versions and the trainer's plan library: `assign()` (every change of a trainee's plan goes through it), `restore()`, `history()`, `library()` |
+| `src/wabot/dashboard/plan_pages.py` | The plan pages: a trainee's plan (history, assigning from the library, the editor) and the plan library (`/dashboard/plans`) |
+| `src/wabot/dashboard/plan_editor.py` | The plan editor's server side: the form's starting data, `parse()` (the submitted plan JSON checked by `plans.TrainingPlan`, errors in Polish) |
+| `src/wabot/dashboard/templates/`, `static/` | `base.html` (the sidebar with the trainee dropdown) and one template per page; `app.css`, `app.js` (folding the sidebar, the phone drawer, the dropdown, the "Wybierz podopiecznego" hint), `weight_chart.js` (the weight chart, an SVG drawn in the browser), `plan_editor.js` (adding, removing and reordering days and exercises in the plan editor) |
 | `src/wabot/utils.py` | `hardcoded_first_message()`, a fixed text used instead of the LLM |
 | `plans/example.yaml` | Example training plan; `scripts/add_trainee.py` gives it to new trainees |
 | `plans/upper_lower.yaml`, `plans/beginner_fbw.yaml` | Two more real plans: an upper/lower split on fixed weekdays, and two alternating full-body workouts for a beginner |
@@ -303,6 +306,28 @@ The same FastAPI app as the webhook; `main.py` calls `dashboard.routes.install(a
 
 **The weight page** (`routes.weight`): `queries.weigh_ins()` takes the trainee's `weight_entries`, keeps the newest row of each date (`current_per_day()`: `MAX(id)` per date, so a correction like "sorki, 81" wins), and adds the body of the message each was saved from and how many reports the day had. The template shows three tiles (last weight, change since the first weigh-in, number of days), the chart, and a table of every day (newest first, the change from the day before, the message, "poprawiona" when the day was reported more than once). The chart's points go into the page as JSON (`<script type="application/json" id="weight-data">`, escaped by Jinja's `tojson`); `static/weight_chart.js` reads it and draws the SVG: dates spaced by time, round kg gridlines around the data (not from zero), the latest value at the end of the line, and a tooltip with the day, the weight and the message for the day nearest the pointer (or the arrow keys).
 
+**A trainee's plan** (`plan_pages.py`, `GET /trainees/<id>/plan`): `plans.of(trainee)` (the JSON in `trainees.training_plan`) drawn by the `plan_cards` macro (`templates/_plan.html`): the notes and one card per day, a table of the exercises with their catalog names (`exercises.BY_ID`), sets, reps, weight, note and replacements. Above it a bar with the current version from `plan_history.history()` (its name, where it came from, since when), "Przypisz" with the trainer's library plans, and "Zapisz w bibliotece". Below it "Historia planów": every version, newest first, each with "Podgląd" and "Przywróć". No plan: "Utwórz plan" or a plan from the library.
+
+**Every change is a version.** Whatever changes a trainee's plan calls `plan_history.assign(session, trainee, plan, source, template)`: it adds a `trainee_plans` row (`source`: `edited`, `template`, `restored`, `script`, or `imported` for plans from before migration 0006) and sets `trainees.training_plan` to the same plan, the copy the bot reads. So the newest version is always the current plan. Saving an edit that changes nothing adds no version. An edited plan keeps the name and `template_id` of the library plan it's based on.
+
+**Editing** (`GET`/`POST /trainees/<id>/plan/edit`), a separate page rather than editing in place, so the plan page stays readable and "Anuluj" just leaves:
+
+1. `edit_trainee_plan`: `plan_editor.form_data()` turns the plan into the form's shape (every field present, a new plan is one empty day) and `plan_edit.html` renders it: notes, then per day a name and the exercises (a catalog dropdown grouped by muscle group, sets, reps, weight, note, replacements as chips with "+ dodaj zamiennik"). The same macros fill `<template>` elements for a new day, exercise and chip. The same page edits library plans, with a name field on top.
+2. In the browser, `static/plan_editor.js` adds, removes (a day after a confirm) and moves days and exercises with ↑ ↓, and adds replacement chips (not the exercise itself, not twice). Leaving with unsaved changes asks first.
+3. "Zapisz plan": the script reads the form into one JSON object shaped like `plans.TrainingPlan` and posts it as the `plan` field.
+4. `save_trainee_plan` (behind the `current_trainer` / `trainee_of_trainer` guard, so another trainer's trainee is 404) calls `plan_editor.parse()`: it trims the text, treats empty fields as not filled in, and validates with `TrainingPlan`, the same rules as a YAML plan (a name per day, no two days with one name, at least one exercise, catalog IDs only, no exercise twice in a day, no exercise as its own replacement, sets a whole number above 0). The plan models raise their own error types (`plans._error`), which `parse()` turns into Polish with the place: "Dzień 2 „Wtorek”, ćwiczenie 3: wybierz ćwiczenie".
+5. Errors: the editor again (422) with the list and what the trainer typed, nothing saved. Otherwise `plan_history.assign(..., "edited")`, commit, and a redirect to the plan page with "Zapisano plan" (`?done=saved`).
+
+**Assigning, restoring, copying** (all POST, redirect back to the plan page with `?done=...`):
+
+- `/plan/assign` (`template_id`): the library plan must be the trainer's (404 otherwise); a copy of it becomes the trainee's plan (`source="template"`). Asks first in the browser when the trainee has a plan (`data-confirm`, handled in `app.js`).
+- `/plan/versions/<v>` shows one version (`version_of_trainee`: 404 unless it's this trainee's); `/plan/versions/<v>/restore` makes it current again as a new version (`plan_history.restore()`); nothing is deleted.
+- `/plan/to-library` (`name`): the current plan copied into the library under a new name.
+
+**The plan library** (Biblioteka planów, `/dashboard/plans`, in the sidebar under Podopieczni): the trainer's `plan_templates`, not tied to a trainee, with the trainees whose current plan came from each (`users_of()`; "(zmieniony)" when they edited it since). `/plans/new` and `/plans/<t>/edit` use the editor with a name (required, not the same as another of the trainer's library plans, any case); `/plans/<t>` shows it; `/plans/<t>/delete` removes it. Every library page goes through `template_of_trainer` (404 for another trainer's). Assigning copies, so editing or deleting a library plan never changes a trainee's plan; the trainee's history keeps the name it had (`trainee_plans.name`; `template_id` becomes null when it's deleted).
+
+The bot reads `trainees.training_plan` for every reply (`assistant.build_instructions(plans.of(trainee))`), so a new plan applies from the trainee's next message. Saved check-ins keep the plan day name and missed exercises they were saved with; renaming a day doesn't change them.
+
 **Signing in with Google** (when `GOOGLE_CLIENT_ID` is set):
 
 1. `GET /dashboard/login` shows Google's "Zaloguj się przez Google" button (Google's script, `accounts.google.com/gsi/client`).
@@ -321,7 +346,9 @@ So a trainer gets access when the operator gives their trainer row their Google 
 `models.py`; changing a model means a new Alembic migration (see CLAUDE.md for the command).
 
 ```
-trainers ──< trainees ──< messages
+trainers ──< plan_templates          (the trainer's plan library)
+         ──< trainees ──< trainee_plans  (every version of the trainee's plan; the newest is current)
+                     ──< messages
                      ──< weight_entries        (per report; the newest per date is current)
                      ──< training_checkins     (per report; the newest per date is current) ──< training_exercises
 ```
@@ -329,7 +356,9 @@ trainers ──< trainees ──< messages
 | Table | Columns | |
 |---|---|---|
 | `trainers` | `id`, `name`, `email` (unique, null until set), `created_at` | created by `scripts/add_trainee.py` for now; `email` is the Google account for the dashboard |
-| `trainees` | `id`, `trainer_id`, `phone` (unique), `name`, `timezone`, `consent_date`, `training_plan` (JSON), `created_at` | `phone` is how a message finds its trainee; `training_plan` is a `plans.TrainingPlan`, read with `plans.of(trainee)` |
+| `trainees` | `id`, `trainer_id`, `phone` (unique), `name`, `timezone`, `consent_date`, `training_plan` (JSON), `created_at` | `phone` is how a message finds its trainee; `training_plan` is a `plans.TrainingPlan`, read with `plans.of(trainee)`: the current plan, the same as the newest `trainee_plans` row |
+| `plan_templates` | `id`, `trainer_id`, `name` (unique per trainer), `plan` (JSON), `created_at`, `updated_at` | the trainer's library; assigning copies `plan` into `trainee_plans` |
+| `trainee_plans` | `id`, `trainer_id`, `trainee_id`, `plan` (JSON), `source`, `template_id` (null when not from the library, or deleted), `name`, `created_at` | written only by `plan_history.assign()`, which also sets `trainees.training_plan`; migration 0006 made each plan already on a trainee its first version (`imported`) |
 | `messages` | `id`, `wamid` (unique), `direction` (`in`/`out`), `phone`, `type`, `body`, `trainee_id`, `trainer_id`, `created_at` | chat history and webhook dedup; `body` and `trainee_id` are null for unregistered numbers (and for messages from before migration 0002) |
 | `weight_entries` | `id`, `trainer_id`, `trainee_id`, `date`, `kg`, `message_id`, `created_at`, `updated_at` | |
 | `training_checkins` | `id`, `trainer_id`, `trainee_id`, `date`, `plan_day`, `status`, `missed_exercises` (JSON list of exercise IDs), `notes`, `message_id`, `created_at`, `updated_at` | |
@@ -351,7 +380,9 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 | add a field to the extracted JSON | the pydantic model in `llm_output.py`, the rules in `prompts.yaml`, a check in `validate_output()` if needed, a column in `models.py` + a migration, tests in `tests/test_llm_output.py` and `tests/test_entries.py` |
 | add an exercise | a new entry in `exercises.yaml` (never rename an existing ID); plans can use it right away |
 | teach the bot a nickname ("siady") | add it to the exercise's `aliases` in `exercises.yaml` |
-| change a trainee's training plan | edit a copy of `plans/example.yaml`, then `uv run python scripts/add_trainee.py --plan path/to/plan.yaml` |
+| change a trainee's training plan | the dashboard: Plan treningowy → Edytuj plan, or Przypisz a library plan; or edit a copy of `plans/example.yaml`, then `uv run python scripts/add_trainee.py --plan path/to/plan.yaml` |
+| change a trainee's plan from code | `plan_history.assign()` (never set `trainees.training_plan` directly, or the history misses it) |
+| add a rule for plans | a validator in `plans.py` that raises `_error("<type>", ...)`, and the Polish text for that type in `plan_editor._message()` |
 | change how the plan looks to the LLM | `TrainingPlan.prompt_text()` in `plans.py`, and the `training_plan` text in `prompts.yaml` that explains the format |
 | register another trainee | `uv run python scripts/add_trainee.py --phone 48... --name ...` |
 | change the reply for unknown numbers | `UNREGISTERED` in `main.py` |
@@ -371,7 +402,7 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 
 - **Corrections of older reports.** The LLM doesn't see what's saved, only the chat history. A correction of a training whose report is no longer in the history (older than 24 h or 20 messages, or always with `HISTORY_MODE=new_only`) replaces that day with just the corrected part. Milestone 4: show the LLM the saved entries of the last days.
 - **Diet reports** are only acknowledged, not extracted or saved.
-- The dashboard has the trainee list and the weight chart; Treningi and Plan treningowy are still empty. Google sign-in is built but untested against real Google until there's an OAuth client ID. No reminders, no photos.
+- The dashboard has the trainee list, the weight chart, the plan with its editor and history, and the plan library; Treningi is still empty. Trainers can't add their own exercises to the catalog yet. Google sign-in is built but untested against real Google until there's an OAuth client ID. No reminders, no photos.
 
 ## Tests
 
@@ -381,5 +412,5 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 - `test_entries.py`: Flow 2b: one entry per day, corrections, out-of-order saves, exercises replaced.
 - `test_conversation.py`: the name trigger, history per trainee, `asked_again()`, plan injection and the plan text, bad plans, the example plan, `exercises.lookup()`, the trainee's local date, `scripts/add_trainee.py`.
 - `test_month_scenario.py`: the three trainees of `scenarios/` (15 reports each in October 2026, three plans, two trainers), interleaved in time order through the whole reply flow (`simulation.Replay` → `main.reply()` → `_complete()` with a fake OpenAI client returning the scenario's answer → `validate_output()` → `entries.save()`). After every message it checks that the model got only that trainee's messages and the simulated date, and what was saved: weight, plan day, status, missed exercises, exercise IDs and replacements. Runs in both `DAILY_UPDATES_ONLY` modes. Some answers say `done` where the code must make it `partial`.
-- `test_dashboard.py`: Flow 6: pages redirect to the login page without a session, the dev login only with `DASHBOARD_DEV_LOGIN`, a trainer sees only their own trainees (404 on another trainer's, also absent from the dropdown), the dropdown keeps the page, tampered or wrongly signed cookies, logout; the weight page (the newest report per day, the message, Ola's data not on Kasia's page, a message can't break out of the JSON script tag, no weigh-ins), the "Wybierz podopiecznego" hint, the Polish date and kg formats; Google sign-in with Google's token check faked: the trainer found by email (any case), refused for an unknown email, an unverified email or a forged token, the CSRF check, off without `GOOGLE_CLIENT_ID`.
+- `test_dashboard.py`: Flow 6: pages redirect to the login page without a session, the dev login only with `DASHBOARD_DEV_LOGIN`, a trainer sees only their own trainees (404 on another trainer's, also absent from the dropdown), the dropdown keeps the page, tampered or wrongly signed cookies, logout; the weight page (the newest report per day, the message, Ola's data not on Kasia's page, a message can't break out of the JSON script tag, no weigh-ins), the "Wybierz podopiecznego" hint, the Polish date and kg formats; the plan pages (every change a version and an unchanged save none, preview and restore, another trainee's version is 404, library plans created with a name of their own, assigning copies so library edits and deletes don't change the trainee, an edit keeps the library link, copying a trainee's plan to the library, another trainer's library is 404 everywhere), the plan editor (the plan shown with catalog names, a new plan, saving trims and drops empty fields, every rule refused with its Polish message and nothing saved, the typed values shown again, broken JSON is an error and not a crash, another trainer's plan is 404, the bot's prompt has the edited plan); Google sign-in with Google's token check faked: the trainer found by email (any case), refused for an unknown email, an unverified email or a forged token, the CSRF check, off without `GOOGLE_CLIENT_ID`.
 - `test_llm_output.py`: `validate_output()` accepting and rejecting outputs (incl. the checks against the plan's IDs and catalog matching by name), the retry in `_complete()` with a fake OpenAI client, the schema.

@@ -6,6 +6,7 @@ trainer: Trenerka Ewa
 trainer_email: ewa.trenerka@example.com
 phone: "48000000003"
 plan: plans/beginner_fbw.yaml
+plan_name: Początkujący – 2 treningi na zmianę
 
 reports:
   - at: "2026-10-01 18:00"

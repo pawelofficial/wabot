@@ -1,6 +1,93 @@
 {% extends "base.html" %}
+{% from "_plan.html" import plan_cards, version_label with context %}
 {% block title %}Plan treningowy – {{ trainee.name }}{% endblock %}
 {% block heading %}Plan treningowy – {{ trainee.name }}{% endblock %}
+{% block actions %}
+{% if plan %}<a class="button" href="/dashboard/trainees/{{ trainee.id }}/plan/edit">✎ Edytuj plan</a>{% endif %}
+{% endblock %}
+
+{% macro assign_form() %}
+{% if library %}
+<form method="post" action="/dashboard/trainees/{{ trainee.id }}/plan/assign" class="inline-form"
+      data-confirm="{{ 'Zastąpić obecny plan wybranym planem z biblioteki? Obecny zostanie w historii planów.' if plan else '' }}">
+  <label class="field"><span>Plan z biblioteki</span>
+    <select name="template_id" required>
+      {% for t in library %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit" class="button">Przypisz</button>
+</form>
+{% else %}
+<p class="muted small">Biblioteka planów jest pusta. <a href="/dashboard/plans/new">Utwórz plan w bibliotece</a>, żeby przypisywać go podopiecznym.</p>
+{% endif %}
+{% endmacro %}
+
 {% block content %}
-<p class="empty">Tu będzie plan treningowy i jego edycja.</p>
+{% if done %}<p class="notice" role="status">{{ done }}</p>{% endif %}
+
+{% if plan %}
+<section class="card plan-bar">
+  <div>
+    {% if current %}
+    <div class="tile-label">Obecny plan</div>
+    <div class="plan-bar-name">{{ version_label(current, sources) }}</div>
+    <div class="muted small">od {{ current.created_at|pl_datetime(trainee.timezone) }}</div>
+    {% endif %}
+    {% if history|length > 1 %}<a class="small" href="#historia">Wcześniejsze plany ({{ history|length - 1 }})</a>{% endif %}
+  </div>
+  <div class="plan-bar-actions">
+    {{ assign_form() }}
+    <details class="to-library" {% if library_error %}open{% endif %}>
+      <summary class="button">Zapisz w bibliotece</summary>
+      <form method="post" action="/dashboard/trainees/{{ trainee.id }}/plan/to-library" class="inline-form">
+        <label class="field"><span>Nazwa w bibliotece</span>
+          <input name="name" value="{{ library_name or '' }}" maxlength="100" required placeholder="np. Redukcja – 3 treningi">
+        </label>
+        <button type="submit" class="button">Zapisz</button>
+      </form>
+      {% if library_error %}<p class="error small">{{ library_error }}</p>{% endif %}
+    </details>
+  </div>
+</section>
+
+{{ plan_cards(plan) }}
+{% else %}
+<div class="card empty-card">
+  <p>{{ trainee.name }} nie ma jeszcze planu treningowego. Bez planu Yanek zapisuje treningi tak, jak je opisano, ale nie wie, czego brakuje.</p>
+  <div class="plan-bar-actions start">
+    <a class="button primary" href="/dashboard/trainees/{{ trainee.id }}/plan/edit">+ Utwórz plan</a>
+    <span class="muted">albo</span>
+    {{ assign_form() }}
+  </div>
+</div>
+{% endif %}
+
+{% if history %}
+<section class="card" id="historia">
+  <h2 class="card-title">Historia planów</h2>
+  <p class="card-subtitle">Każda zmiana planu jest tu zapisana. Przywrócenie robi z wcześniejszego planu obecny; nic nie jest usuwane.</p>
+  <div class="table-scroll">
+    <table class="table">
+      <thead><tr><th>Od</th><th>Plan</th><th>Dni</th><th></th></tr></thead>
+      <tbody>
+        {% for v in history %}
+        <tr>
+          <td class="nowrap">{{ v.created_at|pl_datetime(trainee.timezone) }}</td>
+          <td>{{ version_label(v, sources) }}{% if current and v.id == current.id %}<span class="badge">obecny</span>{% endif %}</td>
+          <td class="muted">{{ v.plan["days"]|map(attribute="name")|join(", ") }}</td>
+          <td class="nowrap"><div class="row-links">
+            <a href="/dashboard/trainees/{{ trainee.id }}/plan/versions/{{ v.id }}">Podgląd</a>
+            {% if not (current and v.id == current.id) %}
+            <form method="post" action="/dashboard/trainees/{{ trainee.id }}/plan/versions/{{ v.id }}/restore" data-confirm="Przywrócić ten plan jako obecny?">
+              <button type="submit" class="link-button">Przywróć</button>
+            </form>
+            {% endif %}
+          </div></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
 {% endblock %}

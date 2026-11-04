@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }}{% endblock %}
+{% block heading %}{{ heading }}{% endblock %}
+
+{% macro exercise_options(selected) %}
+{% for group in groups %}
+<optgroup label="{{ group.name }}">
+  {% for id, name in group.options %}<option value="{{ id }}" {% if id == selected %}selected{% endif %}>{{ name }}</option>{% endfor %}
+</optgroup>
+{% endfor %}
+{% endmacro %}
+
+{% macro row_actions(what) %}
+<div class="row-actions">
+  <button type="button" class="icon-button" data-move="-1" title="Przesuń wyżej" aria-label="Przesuń {{ what }} wyżej"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg></button>
+  <button type="button" class="icon-button" data-move="1" title="Przesuń niżej" aria-label="Przesuń {{ what }} niżej"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3.5 8.5 8 13l4.5-4.5"/></svg></button>
+  <button type="button" class="icon-button danger" data-remove title="Usuń" aria-label="Usuń {{ what }}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+</div>
+{% endmacro %}
+
+{% macro chip(id) %}
+<span class="chip" data-replacement="{{ id }}"><span data-chip-label>{{ catalog[id].name if id in catalog else id }}</span><button type="button" data-remove-replacement aria-label="Usuń zamiennik">×</button></span>
+{% endmacro %}
+
+{% macro exercise_row(e) %}
+<li class="plan-exercise" data-exercise>
+  <div class="exercise-fields">
+    <label class="field exercise-field"><span>Ćwiczenie</span>
+      <select data-field="id" required>
+        <option value="" {% if e.id not in catalog %}selected{% endif %} disabled>Wybierz ćwiczenie…</option>
+        {{ exercise_options(e.id) }}
+      </select>
+    </label>
+    <label class="field narrow"><span>Serie</span><input type="number" min="1" step="1" inputmode="numeric" data-field="sets" value="{{ e.sets }}"></label>
+    <label class="field"><span>Powtórzenia</span><input data-field="reps" value="{{ e.reps }}" placeholder="8, 6–8, 45 s"></label>
+    <label class="field"><span>Ciężar</span><input data-field="weight" value="{{ e.weight }}" placeholder="60 kg, lekko"></label>
+    <label class="field"><span>Uwagi</span><input data-field="note" value="{{ e.note }}" placeholder="np. z gumą"></label>
+  </div>
+  <div class="replacements">
+    <span class="muted small">Zamienniki:</span>
+    <span class="chips" data-replacements>{% for r in e.replacements %}{{ chip(r) }}{% endfor %}</span>
+    <select data-add-replacement aria-label="Dodaj zamiennik">
+      <option value="">+ dodaj zamiennik</option>
+      {{ exercise_options(none) }}
+    </select>
+  </div>
+  {{ row_actions("ćwiczenie") }}
+</li>
+{% endmacro %}
+
+{% macro day_card(day) %}
+<section class="card plan-day" data-day>
+  <div class="plan-day-head">
+    <label class="field grow"><span>Nazwa dnia</span><input data-field="name" value="{{ day.name }}" placeholder="np. Dzień A – nogi" required></label>
+    {{ row_actions("dzień") }}
+  </div>
+  <ol class="plan-exercises" data-exercises>
+    {% for e in day.exercises %}{{ exercise_row(e) }}{% endfor %}
+  </ol>
+  <button type="button" class="button" data-add-exercise>+ Dodaj ćwiczenie</button>
+</section>
+{% endmacro %}
+
+{% block content %}
+{% set empty_exercise = {"id": "", "sets": "", "reps": "", "weight": "", "note": "", "replacements": []} %}
+<noscript><p class="error">Edytor planu działa tylko z włączonym JavaScriptem.</p></noscript>
+{% if errors %}
+<div class="error-box" role="alert">
+  <strong>Plan nie został zapisany:</strong>
+  <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<form method="post" class="plan-editor" data-plan-editor>
+  <input type="hidden" name="plan">
+  <section class="card">
+    {% if library %}
+    <label class="field plan-name"><span>Nazwa planu w bibliotece</span>
+      <input name="name" value="{{ name }}" maxlength="100" required placeholder="np. Redukcja – 3 treningi całego ciała">
+    </label>
+    {% endif %}
+    <label class="field"><span>Notatki do planu</span>
+      <textarea data-field="notes" rows="5" placeholder="Cel, dni cardio, uwagi dla podopiecznego…">{{ data.notes }}</textarea>
+    </label>
+    <p class="card-subtitle">Yanek zna notatki i ćwiczenia z planu: odpowiada na ich podstawie i po nich rozpoznaje zgłoszone ćwiczenia. Zamienniki to ćwiczenia, które podopieczny może zrobić zamiast danego.</p>
+  </section>
+
+  <div data-days>
+    {% for day in data.days %}{{ day_card(day) }}{% endfor %}
+  </div>
+  <button type="button" class="button" data-add-day>+ Dodaj dzień</button>
+
+  <div class="form-actions">
+    <button type="submit" class="button primary">Zapisz plan</button>
+    <a class="button" href="{{ cancel_url }}">Anuluj</a>
+    <span class="muted small">{% if library %}{% if cancel_url != "/dashboard/plans" %}Podopieczni, którzy już mają ten plan, zachowają swoją kopię.{% endif %}{% else %}Wcześniejszy plan zostaje w historii planów; zapisane treningi bez zmian.{% endif %}</span>
+  </div>
+
+  <template data-day-template>{{ day_card({"name": "", "exercises": [empty_exercise]}) }}</template>
+  <template data-exercise-template>{{ exercise_row(empty_exercise) }}</template>
+  <template data-chip-template>{{ chip("") }}</template>
+</form>
+<script src="/dashboard/static/plan_editor.js"></script>
+{% endblock %}

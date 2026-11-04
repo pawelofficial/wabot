@@ -12,10 +12,17 @@ from collections import Counter
 import pytest
 from sqlalchemy import select
 
-from wabot import main, simulation
+from wabot import main, plan_history, simulation
 from wabot.config import Settings
 from wabot.db import SessionLocal
-from wabot.models import Trainee, Trainer, TrainingCheckin, WeightEntry
+from wabot.models import (
+    PlanTemplate,
+    Trainee,
+    TraineePlan,
+    Trainer,
+    TrainingCheckin,
+    WeightEntry,
+)
 
 SCENARIOS = simulation.load_all()
 
@@ -48,10 +55,14 @@ def test_simulated_trainers_and_trainees_have_every_field_filled():
     for scenario in SCENARIOS:
         simulation.register(scenario)
     with SessionLocal() as session:
-        for model in (Trainer, Trainee):
-            for row in session.scalars(select(model)):
+        for model in (Trainer, Trainee, PlanTemplate, TraineePlan):
+            rows = session.scalars(select(model)).all()
+            assert rows, f"the scenarios make no {model.__name__}"
+            for row in rows:
                 empty = [c.name for c in model.__table__.columns if getattr(row, c.name) is None]
-                assert empty == [], f"{model.__name__} {row.name}: {empty} not set by the scenarios"
+                assert empty == [], f"{model.__name__} {row.id}: {empty} not set by the scenarios"
+        # Kasia and Tomek are both Marek's, with different plans: two library plans for him.
+        assert len(plan_history.library(session, 1)) == 2
 
 
 @pytest.mark.parametrize("daily_updates_only", [False, True])

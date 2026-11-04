@@ -14,12 +14,14 @@
 #
 # The trainee and trainer get every field a real one has (tests/test_month_scenario.py
 # checks that none is empty): trainer_email is what the trainer signs in to the dashboard with.
+# The plan goes into the trainer's plan library as plan_name and is assigned from there.
 
 name: Kasia
 trainer: Trener Marek
 trainer_email: marek.trener@example.com
 phone: "48000000001"
 plan: plans/example.yaml
+plan_name: Redukcja – 3 treningi całego ciała
 
 reports:
   - at: "2026-10-02 08:00"

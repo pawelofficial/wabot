@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import ValidationError
 from sqlalchemy.exc import OperationalError
 
-from wabot import plans, trainees
+from wabot import plan_history, plans, trainees
 from wabot.config import get_settings
 from wabot.db import SessionLocal
 from wabot.models import DEFAULT_TIMEZONE, Trainee
@@ -94,15 +94,15 @@ def main(argv: list[str] | None = None) -> None:
                 name=DEFAULT_NAME,
                 consent_date=dt.date.today(),
                 timezone=DEFAULT_TIMEZONE,
-                training_plan=plans.to_db(plan),
             )
             session.add(trainee)
+            plan_history.assign(session, trainee, plan, "script")
         elif args.trainer:
             trainee.trainer = trainees.trainer_named(session, args.trainer)
         if args.name:
             trainee.name = args.name
-        if args.plan:
-            trainee.training_plan = plans.to_db(plan)
+        if args.plan and not created:
+            plan_history.assign(session, trainee, plan, "script")
         if args.no_plan:
             trainee.training_plan = None
         if args.consent_date:

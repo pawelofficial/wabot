@@ -7,6 +7,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
@@ -176,3 +177,41 @@ class TrainingExercise(Base):
     # Catalog ID of the plan exercise this one was done instead of ("suwnica zamiast przysiadów").
     replaces: Mapped[str | None] = mapped_column(String(50))
     comment: Mapped[str | None] = mapped_column(Text)
+
+
+class PlanTemplate(Base):
+    """A plan in the trainer's library (Biblioteka planów), not tied to a trainee. Assigning it
+    to a trainee copies it (a TraineePlan), so editing it later doesn't change their plan."""
+
+    __tablename__ = "plan_templates"
+    __table_args__ = (UniqueConstraint("trainer_id", "name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trainer_id: Mapped[int] = mapped_column(ForeignKey("trainers.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    plan: Mapped[dict] = mapped_column(JSON)  # as plans.to_db() writes it
+    created_at: Mapped[dt.datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class TraineePlan(Base):
+    """One version of a trainee's training plan. Every change (an edit, a plan from the library,
+    a restored older version) adds a row; the newest is the current plan, which is also kept in
+    trainees.training_plan for the bot. Written only by plan_history.assign()."""
+
+    __tablename__ = "trainee_plans"
+    __table_args__ = (Index("ix_trainee_plans_trainee_id_id", "trainee_id", "id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trainer_id: Mapped[int] = mapped_column(ForeignKey("trainers.id"), index=True)
+    trainee_id: Mapped[int] = mapped_column(ForeignKey("trainees.id"))
+    plan: Mapped[dict] = mapped_column(JSON)
+    # How this version came about: plan_history.SOURCES.
+    source: Mapped[str] = mapped_column(String(20))
+    # The library plan it was copied from or is based on (kept through edits); its name at the
+    # time, so the history still says it after the library plan is renamed or deleted.
+    template_id: Mapped[int | None] = mapped_column(
+        ForeignKey("plan_templates.id", ondelete="SET NULL")
+    )
+    name: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[dt.datetime] = mapped_column(UTCDateTime, default=utcnow)

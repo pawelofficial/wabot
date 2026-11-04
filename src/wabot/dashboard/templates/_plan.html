@@ -1,0 +1,41 @@
+{# A training plan drawn read-only: the notes, then a card per day. Used by the trainee's plan,
+   an earlier version of it, and a library plan. Needs `catalog` (exercises.BY_ID). #}
+{% macro plan_cards(plan) %}
+{% if plan.notes %}
+<section class="card">
+  <h2 class="card-title">Notatki do planu</h2>
+  <p class="plan-notes">{{ plan.notes }}</p>
+</section>
+{% endif %}
+{% for day in plan.days %}
+<section class="card">
+  <h2 class="card-title">{{ day.name }}</h2>
+  <p class="card-subtitle">{{ day.exercises|length|pl_count("ćwiczenie", "ćwiczenia", "ćwiczeń") }}</p>
+  <div class="table-scroll">
+    <table class="table plan-table">
+      <thead>
+        <tr><th>#</th><th>Ćwiczenie</th><th class="num">Serie</th><th>Powtórzenia</th><th>Ciężar</th><th>Uwagi</th><th>Zamienniki</th></tr>
+      </thead>
+      <tbody>
+        {% for e in day.exercises %}
+        <tr>
+          <td class="muted num">{{ loop.index }}</td>
+          <td class="exercise">{{ catalog[e.id].name }}<div class="muted small">{{ catalog[e.id].group }}</div></td>
+          <td class="num">{{ e.sets or "" }}</td>
+          <td class="nowrap">{{ e.reps or "" }}</td>
+          <td class="nowrap">{{ e.weight or "" }}</td>
+          <td>{{ e.note or "" }}</td>
+          <td>{% for r in e.replacements %}<span class="chip">{{ catalog[r].name }}</span>{% else %}<span class="muted">–</span>{% endfor %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endfor %}
+{% endmacro %}
+
+{# "Redukcja – 3 treningi (z biblioteki)" for a plan version. #}
+{% macro version_label(version, sources) -%}
+{{ version.name or "Plan bez nazwy" }} <span class="muted">({{ sources[version.source] }})</span>
+{%- endmacro %}
