@@ -15,7 +15,7 @@ Priorities:
 - **1.3** – letters that are in the trainee's name or messages are allowed in the reply.
 - **1.4** – the OpenAI client has a 60 s timeout and one retry (only that part of 1.4).
 - **2.1 (the two bugs only)** – "unchanged" counts only while the trainee has a plan; `--no-plan` for a new trainee leaves no version. The plan is still stored twice.
-- **2.3 (the leak only)** – the library shows only the trainer's current trainees, and `current_version()` filters by trainer. The move policy is still open.
+- **2.3** – decided: a trainee never moves to another trainer. `add_trainee.py --trainer` refuses to change an existing trainee's trainer; the library shows only the trainer's current trainees and `current_version()` filters by trainer, as a safeguard.
 - **2.5** – a restore or assign that changes nothing adds no version ("Podopieczny ma już ten plan z biblioteki").
 - **2.6** – `tests/test_schema.py` fails when an ID disappears (`tests/catalog_ids.txt`).
 - **3.1 (dev login only)** – settings refuse `DASHBOARD_DEV_LOGIN` on Cloud Run (`K_SERVICE` set).
@@ -26,7 +26,7 @@ Priorities:
 - **6.2** – `simulate_month.py` deletes the `-wal`/`-shm` files too, and says to stop the dashboard when the file is in use.
 - **8** – the out-of-date lines in PLAN.md.
 
-Still open: everything else below, notably 1.2 (the "handled" state), 2.1/2.2 (one source for the plan, check-ins linked to versions), 2.3's move policy, 2.7, 3.1's proxy and session points, 4.2.
+Still open: everything else below, notably 1.2 (the "handled" state), 2.1/2.2 (one source for the plan, check-ins linked to versions), 2.7, 3.1's proxy and session points, 4.2.
 
 ## Top of the list
 
@@ -125,7 +125,7 @@ Smaller alternative: keep the column, but send `--no-plan` through `plan_history
 - **What it gives the calendar:** it can show the right day and "4/5, brak: plank" after the plan changes.
 - **Day IDs:** the stable day ID planned with the calendar becomes a lookup inside that version.
 
-### 2.3 Moving a trainee to another trainer (verified, P1 for the leak)
+### 2.3 Moving a trainee to another trainer (verified, P1 for the leak) – ✅ fixed: decided that a trainee never moves
 
 `add_trainee.py --trainer` (`scripts/add_trainee.py:101`) changes only `trainees.trainer_id`. Their messages, entries and plan versions keep the old trainer's ID. As a result:
 
@@ -140,9 +140,7 @@ Smaller alternative: keep the column, but send `--no-plan` through `plan_history
 - **`users_of()`:** join `Trainee` and filter on the trainee's current trainer.
 - **`current_version()`:** filter by trainer like `history()` does.
 
-**Decide the policy:**
-- **(a) Forbid moves:** the script refuses; a trainee who switches trainers is registered again.
-- **(b) A real move:** one transaction rewrites `trainer_id` on all their rows.
+**Decided (2026-11-04): a trainee never moves to another trainer.** `add_trainee.py --trainer` now refuses for an existing trainee, and the dashboard won't offer it.
 
 ### 2.4 Library plan names aren't case-insensitive for Polish letters (verified, P3)
 
@@ -245,7 +243,6 @@ The bot tests give trainees plans by setting `training_plan=` directly: `test_we
 
 - the reply to a bot-started message (1.1)
 - the failure paths of 1.2
-- a trainee moving between trainers (2.3)
 - migrations (4.1)
 - that catalog IDs stay (2.6)
 
@@ -297,7 +294,7 @@ These aren't bugs, but several later features depend on them.
 2. **One place for the current plan (2.1):** a foreign key to the version, or keep the copy and guard it.
 3. **Check-ins linked to a plan version, plus stable day IDs (2.2).** Together with the calendar.
 4. **Two sessions on one day** (already open in PLAN.md). This blocks the calendar and affects "the newest row of the day wins" everywhere.
-5. **Moving trainees between trainers (2.3):** forbid, or move everything.
+5. ~~**Moving trainees between trainers (2.3)**~~ – decided: never.
 6. **Trainers' own exercises vs the fixed catalog type (2.7).**
 7. **Trainees who aren't Polish (1.3):** the replies stay Polish, but names and messages in other scripts should work.
 8. **The bot's name spelling (1.6).**

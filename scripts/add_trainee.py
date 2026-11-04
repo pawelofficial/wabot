@@ -2,7 +2,8 @@
 
 The bot answers only registered numbers; anyone else gets a fixed "not registered" reply. With
 no options this registers your own number (WHATSAPP_TEST_RECIPIENT) with the example plan.
-Running it again for the same number changes only the options you pass.
+Running it again for the same number changes only the options you pass. A trainee never moves
+to another trainer (docs/PLAN.md), so --trainer is only for a new trainee.
 
 Run from the project root, after `uv run alembic upgrade head`:
     uv run python scripts/add_trainee.py
@@ -41,7 +42,10 @@ def main(argv: list[str] | None = None) -> None:
         "--phone", help="digits with country code (default: WHATSAPP_TEST_RECIPIENT)"
     )
     parser.add_argument("--name", help=f"trainee's name (new trainee: {DEFAULT_NAME!r})")
-    parser.add_argument("--trainer", help=f"trainer's name, created if new ({DEFAULT_TRAINER!r})")
+    parser.add_argument(
+        "--trainer",
+        help=f"new trainee: the trainer's name, created if new ({DEFAULT_TRAINER!r})",
+    )
     parser.add_argument(
         "--trainer-email", help="the Google account the trainer signs in to the dashboard with"
     )
@@ -98,8 +102,12 @@ def main(argv: list[str] | None = None) -> None:
             session.add(trainee)
             if not args.no_plan:
                 plan_history.assign(session, trainee, plan, "script")
-        elif args.trainer:
-            trainee.trainer = trainees.trainer_named(session, args.trainer)
+        elif args.trainer and args.trainer != trainee.trainer.name:
+            # Their messages, entries and plans belong to their trainer.
+            sys.exit(
+                f"{trainee.name} is {trainee.trainer.name}'s trainee; "
+                "a trainee never moves to another trainer"
+            )
         if args.name:
             trainee.name = args.name
         if args.plan and not created:

@@ -703,7 +703,8 @@ def test_a_trainee_moved_to_another_trainer_isnt_in_the_old_trainers_library(
         f"/dashboard/trainees/{people['Kasia'].id}/plan/assign", data={"template_id": template.id}
     )
     assert "Kasia" in client.get("/dashboard/plans").text
-    with SessionLocal() as session:  # as scripts/add_trainee.py --trainer does
+    # Trainees never move (add_trainee.py refuses); if a row changed by hand, nothing leaks.
+    with SessionLocal() as session:
         session.get(Trainee, people["Kasia"].id).trainer_id = people["Trenerka Ewa"].id
         session.commit()
     assert "Kasia" not in client.get("/dashboard/plans").text

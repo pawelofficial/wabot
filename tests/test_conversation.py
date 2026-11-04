@@ -360,18 +360,26 @@ def test_add_trainee_registers_and_then_updates(monkeypatch, capsys):
         assert plans.of(trainee) == plans.load(EXAMPLE_PLAN)
         assert trainee.consent_date == dt.date.today()
 
-    run_add_trainee(monkeypatch, "--phone", PHONE, "--no-plan", "--trainer", "Tomek")
+    run_add_trainee(monkeypatch, "--phone", PHONE, "--no-plan", "--trainer", "Trener testowy")
     with SessionLocal() as session:
         trainee = session.scalar(select(Trainee))
         # Only what was passed changes.
         assert (trainee.name, trainee.training_plan, trainee.trainer.name) == (
             "Ania",
             None,
-            "Tomek",
+            "Trener testowy",
         )
-    assert "Updated Ania (48111222333), trainer Tomek (no email), plan: none" in (
+    assert "Updated Ania (48111222333), trainer Trener testowy (no email), plan: none" in (
         capsys.readouterr().out
     )
+
+
+def test_add_trainee_never_moves_a_trainee_to_another_trainer(monkeypatch):
+    run_add_trainee(monkeypatch, "--phone", PHONE, "--name", "Ania")
+    with pytest.raises(SystemExit, match="never moves to another trainer"):
+        run_add_trainee(monkeypatch, "--phone", PHONE, "--trainer", "Tomek")
+    with SessionLocal() as session:
+        assert session.scalar(select(Trainee)).trainer.name == "Trener testowy"
 
 
 def test_add_trainee_sets_the_trainers_email(monkeypatch):

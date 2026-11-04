@@ -16,6 +16,7 @@ A WhatsApp assistant for personal trainers. Trainees report weight, training and
 | Consent (GDPR) | Collected on paper, offline; the app only records that it's on file |
 | Photos | Stored and shown on the dashboard; not sent to the LLM (after the MVP) |
 | Trainer accounts | Created by hand by the operator |
+| Changing trainers | Never: a trainee stays with the trainer who registered them, with all their messages, entries and plans (decided 2026-11-04) |
 
 ## Trainee onboarding
 
