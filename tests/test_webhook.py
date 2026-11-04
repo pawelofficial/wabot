@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from wabot import assistant, entries, main, plans, trainees, whatsapp
+from wabot.config import Settings
 from wabot.db import SessionLocal
 from wabot.llm_output import LlmOutput, Weight
 from wabot.models import Message, Trainee, WeightEntry, utcnow
@@ -250,14 +251,20 @@ def test_reported_weight_is_saved(client, sent, trainee, llm_returns):
     assert sent == [(PHONE, "Zapisałem 80 kg.")]
 
 
-def test_a_correction_replaces_the_days_weight(client, sent, trainee, llm_returns):
+@pytest.mark.parametrize("daily_updates_only", [False, True])
+def test_a_correction_is_saved(client, sent, trainee, llm_returns, monkeypatch, daily_updates_only):
+    settings = Settings(daily_updates_only=daily_updates_only)
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
     llm_returns(weight_output(80.0), weight_output(81.0))
     post_signed(client, text_payload("wamid.1", "yanek zanotuj 80kg"))
     post_signed(client, text_payload("wamid.2", "yanek sorki, zanotuj 81kg"))
 
-    [entry] = stored_weights()
+    saved = stored_weights()
     correction = next(m for m in stored_messages() if m.wamid == "wamid.2")
-    assert (entry.kg, entry.message_id) == (81.0, correction.id)
+    # The newest row of the day is the current value either way.
+    assert (saved[-1].kg, saved[-1].message_id) == (81.0, correction.id)
+    # By default the first report is kept too.
+    assert [e.kg for e in saved] == ([81.0] if daily_updates_only else [80.0, 81.0])
 
 
 def test_a_failed_save_sends_the_apology_instead_of_the_confirmation(

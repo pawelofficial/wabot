@@ -109,7 +109,7 @@ def reply(message_id: int) -> None:
                 "Not answering %s: the reply to the trainee's next message covers it", message.wamid
             )
             return
-        text = save_report(session, trainee, message, result)
+        text = save_report(session, trainee, message, result, settings.daily_updates_only)
     try:
         conversation.send_and_store(settings, trainee, text)
     except httpx.HTTPStatusError as e:
@@ -120,14 +120,18 @@ def reply(message_id: int) -> None:
 
 
 def save_report(
-    session: Session, trainee: Trainee, message: Message, result: LlmOutput | None
+    session: Session,
+    trainee: Trainee,
+    message: Message,
+    result: LlmOutput | None,
+    daily_updates_only: bool = False,
 ) -> str:
     """Save what the LLM extracted. Returns the text to send: the LLM's reply, or the apology
     if the LLM call or the save failed (the reply would confirm something that isn't saved)."""
     if result is None:
         return APOLOGY
     try:
-        entries.save(session, trainee, message, result)
+        entries.save(session, trainee, message, result, daily_updates_only)
     except Exception:
         log.exception("Saving the report from %s failed", message.wamid)
         return APOLOGY

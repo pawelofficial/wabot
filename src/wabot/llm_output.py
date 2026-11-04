@@ -3,7 +3,8 @@
 The pydantic models are the single source of the structure: the JSON schema sent to OpenAI is
 generated from them (`json_schema()`), and `validate_output()` parses the response into them and
 then checks the values – plausible ranges, dates, and exercise IDs that must come from the
-training plan.
+training plan. What the code can work out itself it fills in after the checks: which plan
+exercises were missed, whether the day was done or partial, and catalog IDs by name.
 The meaning of each field is explained to the model in prompts.yaml.
 """
 
@@ -12,7 +13,8 @@ import re
 import unicodedata
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic.json_schema import SkipJsonSchema
 
 from wabot import exercises
 from wabot.exercises import ExerciseId
@@ -56,11 +58,14 @@ class Exercise(_Strict):
 class Training(_Strict):
     date: dt.date
     plan_day: str | None
+    # For a plan day the code sets done/partial from the exercises (_fill_in_missed).
     status: Literal["done", "partial", "skipped"]
     exercises: list[Exercise]
-    # IDs of the day's plan exercises the trainee said they didn't do.
-    missed_exercises: list[ExerciseId]
     notes: str | None
+    # IDs of the plan day's exercises that aren't in the report (done or replaced): what the
+    # trainee didn't report counts as not done. Filled in by the code, so it isn't in the
+    # schema the model gets.
+    missed_exercises: SkipJsonSchema[list[ExerciseId]] = Field(default_factory=list)
 
 
 class LlmOutput(_Strict):
@@ -138,9 +143,6 @@ def _check_against_plan(errors: list[str], training: Training, plan: TrainingPla
             errors.append(f"{where}: {ex.exercise_id} is {where_planned}, so in_plan must be true")
         if ex.replaces is not None and ex.replaces not in planned:
             errors.append(f"{where}: replaces {ex.replaces}, which isn't {where_planned}")
-    for missed in training.missed_exercises:
-        if missed not in planned:
-            errors.append(f"missed exercise {missed} isn't {where_planned}")
 
 
 def validate_output(raw: str, today: dt.date, plan: TrainingPlan | None) -> LlmOutput:
@@ -184,13 +186,8 @@ def validate_output(raw: str, today: dt.date, plan: TrainingPlan | None) -> LlmO
                 errors.append(f"{where}: sets {ex.sets} is outside 1–{MAX_SETS}")
             if ex.weight_kg is not None and not 0 < ex.weight_kg <= MAX_LOAD_KG:
                 errors.append(f"{where}: weight_kg {ex.weight_kg} is outside 0–{MAX_LOAD_KG}")
-            if ex.replaces is not None:
-                if ex.in_plan:
-                    errors.append(f"{where}: replaces a plan exercise, so in_plan must be false")
-                if ex.replaces in training.missed_exercises:
-                    errors.append(
-                        f"{where}: {ex.replaces!r} was replaced, so it isn't a missed exercise"
-                    )
+            if ex.replaces is not None and ex.in_plan:
+                errors.append(f"{where}: replaces a plan exercise, so in_plan must be false")
 
         if plan:
             _check_against_plan(errors, training, plan)
@@ -199,8 +196,6 @@ def validate_output(raw: str, today: dt.date, plan: TrainingPlan | None) -> LlmO
                 errors.append("training.plan_day must be null: the trainee has no plan")
             if any(ex.in_plan for ex in training.exercises):
                 errors.append("in_plan must be false: the trainee has no plan")
-            if training.missed_exercises:
-                errors.append("missed_exercises must be empty: the trainee has no plan")
             if any(ex.replaces is not None for ex in training.exercises):
                 errors.append("replaces must be null: the trainee has no plan")
 
@@ -209,8 +204,24 @@ def validate_output(raw: str, today: dt.date, plan: TrainingPlan | None) -> LlmO
     # Slips the code can fix itself, without another LLM call.
     output.reply = _to_whatsapp_format(output.reply)
     if output.training is not None:
+        _fill_in_missed(output.training, plan)
         _match_to_catalog(output.training, plan)
     return output
+
+
+def _fill_in_missed(training: Training, plan: TrainingPlan | None) -> None:
+    """Missed exercises and done/partial, from the plan day and the report. An exercise of the
+    day that the trainee didn't report as done or replaced counts as not done."""
+    day = plan.day(training.plan_day) if plan and training.plan_day else None
+    if day is None:
+        # Training outside the plan (or no plan): nothing to miss.
+        training.missed_exercises = []
+        return
+    covered = {ex.exercise_id for ex in training.exercises if ex.in_plan}
+    covered |= {ex.replaces for ex in training.exercises if ex.replaces}
+    training.missed_exercises = [e.id for e in day.exercises if e.id not in covered]
+    if training.status != "skipped":
+        training.status = "partial" if training.missed_exercises else "done"
 
 
 def _match_to_catalog(training: Training, plan: TrainingPlan | None) -> None:

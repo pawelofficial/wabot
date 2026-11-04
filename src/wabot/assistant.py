@@ -71,15 +71,20 @@ def _today(trainee: Trainee, now: datetime) -> str:
 REFUSAL = "Przepraszam, nie mogę w tym pomóc. Zapytaj proszę swojego trenera."
 
 
-def build_instructions(plan: TrainingPlan | None, task: str | None = None) -> str:
-    """System prompt with the trainee's plan injected (its exercises with their catalog IDs,
-    names, aliases and replacements; not the whole catalog). The static part comes first so
-    the shared prefix stays cacheable across trainees."""
+def build_instructions(
+    plan: TrainingPlan | None, trainee_name: str | None = None, task: str | None = None
+) -> str:
+    """System prompt with the trainee's name and plan injected (the plan's exercises with
+    their catalog IDs, names, aliases and replacements; not the whole catalog). The static
+    part comes first so the shared prefix stays cacheable across trainees."""
+    parts = [PROMPTS["system"]]
+    if trainee_name:
+        parts.append(PROMPTS["trainee_name"].replace("{trainee_name}", trainee_name.strip()))
     if plan:
         plan_part = PROMPTS["training_plan"].replace("{training_plan}", plan.prompt_text())
     else:
         plan_part = PROMPTS["no_training_plan"]
-    parts = [PROMPTS["system"], plan_part]
+    parts.append(plan_part)
     if task:
         parts.append(task)
     return "\n".join(parts)
@@ -152,11 +157,11 @@ def generate_reply(
     settings: Settings, trainee: Trainee, history: list[Message], now: datetime
 ) -> LlmOutput:
     """Reply to the trainee's latest message (the last entry of history) and extract the
-    weight and training it reports. The trainee's plan goes into the prompt."""
+    weight and training it reports. The trainee's name and plan go into the prompt."""
     plan = plans.of(trainee)
     return _complete(
         settings,
-        build_instructions(plan),
+        build_instructions(plan, trainee.name),
         [
             *reply_input(settings, history),
             # Per-request context goes after the history so the prefix stays cacheable.
@@ -174,7 +179,7 @@ def generate_first_message(
     plan = plans.of(trainee)
     output = _complete(
         settings,
-        build_instructions(plan, PROMPTS["first_message_task"]),
+        build_instructions(plan, trainee.name, PROMPTS["first_message_task"]),
         [
             *to_llm_messages(history),
             # The API needs the conversation to end with a user turn.

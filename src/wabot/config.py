@@ -32,6 +32,11 @@ class Settings(DatabaseSettings):
     # correction of a training can't see the earlier report, so it can replace the whole day
     # with just the corrected part.
     history_mode: Literal["marked", "new_only"] = "marked"
+    # False (default): every weight and training report is saved as a new row, so nothing a
+    # trainee sent is overwritten – a correction ("sorki, 81") adds a row, and the newest row
+    # of a day is the current value. True: one entry per trainee per day, a newer report
+    # updates it (entries.py).
+    daily_updates_only: bool = False
     # Use utils.hardcoded_first_message() instead of the LLM for messages the bot starts.
     hardcoded_first_message: bool = False
     # Your own number (digits only); where the scripts send test messages.

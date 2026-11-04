@@ -14,7 +14,7 @@ A walk through what happens at runtime: which function calls which, in what orde
 | `src/wabot/conversation.py` | The glue: "is the bot mentioned?", chat history from the db, "did the trainee ask again?", send + store |
 | `src/wabot/assistant.py` | Talking to OpenAI: build the prompt, call the model, retry on invalid output |
 | `src/wabot/llm_output.py` | The shape of the model's answer (pydantic models → JSON schema) and `validate_output()` |
-| `src/wabot/entries.py` | Saving the extracted weight and training into the db (one per day, newer replaces older) |
+| `src/wabot/entries.py` | Saving the extracted weight and training into the db (a new row per report; `DAILY_UPDATES_ONLY` updates the day's row instead) |
 | `src/wabot/prompts.yaml` | The Polish prompt texts |
 | `src/wabot/exercises.yaml` / `exercises.py` | The exercise catalog: fixed IDs, names, aliases; `lookup()` finds an ID by name |
 | `src/wabot/plans.py` | Training plans: days of catalog exercises with the trainer's replacements; loading, checking, the text the LLM sees |
@@ -99,8 +99,9 @@ What happens inside `assistant.generate_reply(settings, trainee, history, now)`:
 ```
 generate_reply()
   ├─ plan = plans.of(trainee)              the JSON in trainees.training_plan → TrainingPlan
-  ├─ build_instructions(plan)              → the system prompt (one string):
+  ├─ build_instructions(plan, trainee.name)  → the system prompt (one string):
   │     PROMPTS["system"]                     who Yanek is, all extraction and reply rules
+  │   + PROMPTS["trainee_name"]               "…ma na imię Kasia." (zrobiłaś / zrobiłeś)
   │   + PROMPTS["training_plan"]              with plan.prompt_text() filled in (below)
   │     (or PROMPTS["no_training_plan"] when the trainee has no plan)
   ├─ reply_input(settings, history)       → the chat turns, shaped by HISTORY_MODE:
@@ -156,7 +157,7 @@ The model must answer with JSON matching `LlmOutput` (strict mode, so the struct
 }
 ```
 
-`training`, when a session is reported, has `date`, `plan_day` (copied exactly from the plan), `status` (`done` / `partial` / `skipped`), `exercises`, `missed_exercises` and `notes`. `plan_day` is the day's name and `missed_exercises` are plan exercise IDs. Each exercise has `exercise_id` (a catalog ID or null), `name`, `in_plan`, `sets`, `reps`, `weight_kg`, `replaces` (the ID of the plan exercise it was done instead of) and `comment`. What each field means is explained to the model in `prompts.yaml`, in Polish.
+`training`, when a session is reported, has `date`, `plan_day` (copied exactly from the plan), `status` (`done` / `partial` / `skipped`), `exercises`, `missed_exercises` and `notes`. `plan_day` is the day's name. `missed_exercises` isn't in the schema the model gets: the code fills it in, along with `done`/`partial` (step 6 below). Each exercise has `exercise_id` (a catalog ID or null), `name`, `in_plan`, `sets`, `reps`, `weight_kg`, `replaces` (the ID of the plan exercise it was done instead of) and `comment`. What each field means is explained to the model in `prompts.yaml`, in Polish.
 
 For a correction or addition to a training reported earlier ("sorki, przysiad był na 65 kg"), the prompt tells the model to return the whole session again, with the change, because the save replaces the day (Flow 2b). The model can only do that if the earlier report is in the history it gets.
 
@@ -169,32 +170,36 @@ OpenAI guarantees the structure; this function checks that the **values** make s
 1. Parse into `LlmOutput` with pydantic. Wrong types, missing fields, extra fields, an exercise ID not in the catalog → errors like `weight.kg: Input should be a valid number`.
 2. `reply`: not empty, not JSON, at most 4096 characters (WhatsApp's limit), only Latin letters (Polish letters and emoji are fine; Cyrillic or Armenian slip-ins are not).
 3. `weight`: 30–300 kg, date not in the future and not more than 31 days ago.
-4. `training`: same date window; `skipped` has no exercises, `done`/`partial` have at least one; sets 1–20; load 0–500 kg; a `replaces` exercise has `in_plan: false` and isn't also listed as missed.
-5. Against the plan (`_check_against_plan()`): `plan_day` must be one of the plan's days (case and spacing don't matter; it's set to the plan's exact name). An `in_plan` exercise needs the ID of an exercise planned for that day. A planned ID with `in_plan: false` is wrong unless it replaces something. `replaces` and `missed_exercises` must be IDs planned for that day. Without `plan_day`, any day of the plan counts. Without a plan, `plan_day`, `in_plan`, `replaces` and `missed_exercises` must all be empty.
-6. Everything passed, so the code fixes what it can itself: `**bold**` (Markdown) becomes `*bold*` (WhatsApp) in the reply. `_match_to_catalog()` gives every exercise that isn't in the plan or its replacements the catalog ID matching its name ("Pompki" → `push_up`), keeps the model's own ID if the name matches nothing, and leaves it null if there's neither. Then the `LlmOutput` is returned.
+4. `training`: same date window; `skipped` has no exercises, `done`/`partial` have at least one; sets 1–20; load 0–500 kg; a `replaces` exercise has `in_plan: false`.
+5. Against the plan (`_check_against_plan()`): `plan_day` must be one of the plan's days (case and spacing don't matter; it's set to the plan's exact name). An `in_plan` exercise needs the ID of an exercise planned for that day. A planned ID with `in_plan: false` is wrong unless it replaces something. `replaces` must be an ID planned for that day. Without `plan_day`, any day of the plan counts. Without a plan, `plan_day`, `in_plan` and `replaces` must all be empty.
+6. Everything passed, so the code fills in and fixes what it can itself. `**bold**` (Markdown) becomes `*bold*` (WhatsApp) in the reply. `_fill_in_missed()` sets `missed_exercises` to the plan day's exercises that aren't in the report as done (`in_plan`) or replaced (`replaces`): what the trainee didn't report counts as not done. It then sets the status to `done` if nothing is missed, otherwise `partial`. `skipped` stays, with the whole day missed. Without a plan day, nothing is missed. `_match_to_catalog()` gives every exercise that isn't in the plan or its replacements the catalog ID matching its name ("Pompki" → `push_up`), keeps the model's own ID if the name matches nothing, and leaves it null if there's neither. Then the `LlmOutput` is returned.
 
 ## Flow 2b: saving the extracted data
 
-`entries.save(session, trainee, message, output)`, called from `main.save_report()`:
+`entries.save(session, trainee, message, output, daily_updates_only)`, called from `main.save_report()` with `DAILY_UPDATES_ONLY` from `.env`:
 
 ```
 entries.save()
   ├─ output.weight   → _save_weight()
-  │     the trainee's WeightEntry for weight.date
-  │       none          → INSERT a new one
-  │       saved from a newer message (entry.message_id > message.id) → leave it, stop
-  │       otherwise     → replace it
+  │     _entry_to_fill() picks the row:
+  │       DAILY_UPDATES_ONLY=False (default) → always a new WeightEntry (INSERT)
+  │       DAILY_UPDATES_ONLY=True → the trainee's newest WeightEntry for weight.date
+  │           none          → a new one (INSERT)
+  │           saved from a newer message (entry.message_id > message.id) → leave it, stop
+  │           otherwise     → that row (UPDATE)
   │     set kg, message_id = the message the bot is answering
   ├─ output.training → _save_training()
-  │     the trainee's TrainingCheckin for training.date, same rules
+  │     a TrainingCheckin for training.date, the same way
   │     set plan_day, status, missed_exercises, notes, message_id
   │     checkin.exercises = [TrainingExercise(**ex) for each exercise]
-  │         the old exercise rows are deleted (delete-orphan)
-  └─ COMMIT
+  │         on an updated check-in, the old exercise rows are deleted (delete-orphan)
+  └─ COMMIT   (SQLAlchemy sends the INSERT or UPDATE here)
 ```
 
-- **One weight and one training per trainee per day** (a unique constraint on `trainee_id, date`). That's how corrections work: "yanek 80" then "yanek sorki, 81" leaves one entry, 81.
-- **The "newer message" check** is for replies that finish out of order. Together with `asked_again()` in Flow 1 it means an older report never overwrites a newer one.
+- **By default nothing is overwritten.** "yanek 80" then "yanek sorki, 81" leaves two rows for the day, 80 and 81. The current value of a day is its newest row (highest `id`); that's what the dashboard should show, and the older rows are the history of corrections. A corrected training is likewise a whole new check-in with its own exercises.
+- **`DAILY_UPDATES_ONLY=True`** keeps one row per trainee per day: the same two messages leave one row, 81. If a day already has several rows (saved while the setting was off), the newest one is updated.
+- **The "newer message" check** (only with `DAILY_UPDATES_ONLY=True`) is for replies that finish out of order: an older report never overwrites a newer one. By default both are kept anyway, and the one from the newer message has the higher `message_id`.
+- Messages sent close together ("yanek 80", "yanek sorki, 81" before the first reply is out) still give one row: `asked_again()` in Flow 1 skips the first, and the second's LLM call sees both and returns 81. The 80 stays in `messages`.
 - `trainer_id` is copied from the trainee onto every entry, so the dashboard can filter every query by trainer.
 
 ## Flow 3: the bot starts a conversation itself
@@ -284,8 +289,8 @@ days:
 
 ```
 trainers ──< trainees ──< messages
-                     ──< weight_entries        (one per trainee per date)
-                     ──< training_checkins     (one per trainee per date) ──< training_exercises
+                     ──< weight_entries        (per report; the newest per date is current)
+                     ──< training_checkins     (per report; the newest per date is current) ──< training_exercises
 ```
 
 | Table | Columns | |
@@ -299,6 +304,7 @@ trainers ──< trainees ──< messages
 
 - `message_id` on an entry is the trainee's message the bot answered when it saved the entry (the "yanek ..." one), so the dashboard can show the original message next to it.
 - All timestamps are UTC (`UTCDateTime`, so SQLite and Postgres behave the same). `date` columns are the trainee's local day.
+- **Reading the current value**: the newest row per trainee and date, e.g. `SELECT * FROM weight_entries w WHERE id = (SELECT MAX(id) FROM weight_entries WHERE trainee_id = w.trainee_id AND date = w.date)`. An index on `(trainee_id, date)` keeps it fast. Migration 0004 replaced the old one-per-day unique constraint with it.
 - Migration 0003 turned `training_plan` from text into JSON and cleared the old free-text plans. Register a plan again with `scripts/add_trainee.py --plan plans/example.yaml`.
 - On SQLite, `alembic/env.py` turns foreign keys off while migrating. Batch mode changes a table by copying it and dropping the old one, which foreign keys would block.
 

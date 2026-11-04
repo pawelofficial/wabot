@@ -4,9 +4,9 @@ from sqlalchemy import (
     JSON,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Text,
-    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
@@ -106,10 +106,11 @@ class Message(Base):
 
 
 class WeightEntry(Base):
-    """A trainee's body weight on a day. One per day: a newer report replaces it."""
+    """A trainee's body weight on a day, as reported. A day can have several (corrections are
+    new rows unless DAILY_UPDATES_ONLY); the newest one is the current value."""
 
     __tablename__ = "weight_entries"
-    __table_args__ = (UniqueConstraint("trainee_id", "date"),)
+    __table_args__ = (Index("ix_weight_entries_trainee_id_date", "trainee_id", "date"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     trainer_id: Mapped[int] = mapped_column(ForeignKey("trainers.id"), index=True)
@@ -123,11 +124,11 @@ class WeightEntry(Base):
 
 
 class TrainingCheckin(Base):
-    """A trainee's training on a day, as reported. One per day: a newer report replaces it,
-    exercises included."""
+    """A trainee's training on a day, as reported, with its exercises. A day can have several
+    (see WeightEntry); the newest one is the current session."""
 
     __tablename__ = "training_checkins"
-    __table_args__ = (UniqueConstraint("trainee_id", "date"),)
+    __table_args__ = (Index("ix_training_checkins_trainee_id_date", "trainee_id", "date"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     trainer_id: Mapped[int] = mapped_column(ForeignKey("trainers.id"), index=True)

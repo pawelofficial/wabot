@@ -34,10 +34,11 @@ def report(trainee):
     return store
 
 
-def save(trainee, message, weight=None, training=None) -> None:
+def save(trainee, message, weight=None, training=None, daily=False) -> None:
+    """entries.save(); daily is DAILY_UPDATES_ONLY."""
     with SessionLocal() as session:
         output = LlmOutput(reply="Zapisałem.", weight=weight, training=training)
-        entries.save(session, trainee, message, output)
+        entries.save(session, trainee, message, output, daily_updates_only=daily)
 
 
 def weights() -> list[tuple[dt.date, float, int]]:
@@ -78,11 +79,27 @@ def test_weight_is_saved_for_its_day(trainee, report):
         assert (entry.trainee_id, entry.trainer_id) == (trainee.id, trainee.trainer_id)
 
 
-def test_a_newer_report_for_the_day_replaces_the_weight(trainee, report):
+def test_by_default_a_correction_is_a_new_row(trainee, report):
     first, correction = report("yanek 80"), report("yanek sorki, 81")
     save(trainee, first, weight=Weight(kg=80, date=MONDAY))
     save(trainee, correction, weight=Weight(kg=81, date=MONDAY))
+    assert weights() == [(MONDAY, 80, first.id), (MONDAY, 81, correction.id)]
+
+
+def test_daily_updates_only_replaces_the_days_weight(trainee, report):
+    first, correction = report("yanek 80"), report("yanek sorki, 81")
+    save(trainee, first, weight=Weight(kg=80, date=MONDAY), daily=True)
+    save(trainee, correction, weight=Weight(kg=81, date=MONDAY), daily=True)
     assert weights() == [(MONDAY, 81, correction.id)]
+
+
+def test_daily_updates_only_updates_the_newest_of_several_rows(trainee, report):
+    # Rows saved while DAILY_UPDATES_ONLY was off.
+    first, second, third = report(), report(), report()
+    save(trainee, first, weight=Weight(kg=80, date=MONDAY))
+    save(trainee, second, weight=Weight(kg=81, date=MONDAY))
+    save(trainee, third, weight=Weight(kg=82, date=MONDAY), daily=True)
+    assert weights() == [(MONDAY, 80, first.id), (MONDAY, 82, third.id)]
 
 
 def test_another_day_gets_its_own_weight(trainee, report):
@@ -95,8 +112,8 @@ def test_another_day_gets_its_own_weight(trainee, report):
 def test_an_older_report_does_not_overwrite_a_newer_one(trainee, report):
     # Replies can finish out of order: the reply to the newer message is saved first.
     older, newer = report("yanek 80"), report("yanek sorki, 81")
-    save(trainee, newer, weight=Weight(kg=81, date=MONDAY))
-    save(trainee, older, weight=Weight(kg=80, date=MONDAY))
+    save(trainee, newer, weight=Weight(kg=81, date=MONDAY), daily=True)
+    save(trainee, older, weight=Weight(kg=80, date=MONDAY), daily=True)
     assert weights() == [(MONDAY, 81, newer.id)]
 
 
@@ -135,14 +152,31 @@ def test_training_is_saved_with_its_exercises(trainee, report):
     assert (leg_press.in_plan, leg_press.replaces) == (False, "hip_thrust")
 
 
-def test_a_corrected_training_replaces_the_whole_session(trainee, report):
+def save_training_and_correction(trainee, report, daily):
     first, correction = report(), report("yanek sorki, przysiad był na 65 kg")
     squat = exercise("Przysiad ze sztangą", "back_squat", sets=4, reps="8", weight_kg=60)
     hip_thrust = exercise("Hip thrust", "hip_thrust")
-    save(trainee, first, training=training(squat, hip_thrust, status="partial", missed=["plank"]))
+    save(
+        trainee,
+        first,
+        training=training(squat, hip_thrust, status="partial", missed=["plank"]),
+        daily=daily,
+    )
     # The LLM returns the whole session again, with the fix.
     squat_65 = squat.model_copy(update={"weight_kg": 65})
-    save(trainee, correction, training=training(squat_65, hip_thrust))
+    save(trainee, correction, training=training(squat_65, hip_thrust), daily=daily)
+
+
+def test_by_default_a_corrected_training_is_a_new_session(trainee, report):
+    save_training_and_correction(trainee, report, daily=False)
+    first, corrected = checkins()
+    assert [e.weight_kg for e in first.exercises] == [60, None]
+    assert [e.weight_kg for e in corrected.exercises] == [65, None]
+    assert (first.status, corrected.status) == ("partial", "done")
+
+
+def test_daily_updates_only_replaces_the_whole_session(trainee, report):
+    save_training_and_correction(trainee, report, daily=True)
 
     [checkin] = checkins()
     assert (checkin.status, checkin.missed_exercises) == ("done", [])

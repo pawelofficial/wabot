@@ -52,7 +52,7 @@
 
 - id: bench_press
   name: Wyciskanie sztangi leżąc
-  aliases: [wyciskanie leżąc, klata, bench press, ławka płaska]
+  aliases: [wyciskanie leżąc, bench press, ławka płaska]
   group: klatka
 
 - id: incline_dumbbell_press

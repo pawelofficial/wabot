@@ -45,6 +45,7 @@ cp .env.example .env    # then fill in the values
 | `OPENAI_API_KEY` | platform.openai.com → API keys |
 | `OPENAI_MODEL` | Optional, defaults to `gpt-5.6-luna` |
 | `HISTORY_MODE` | Optional. `marked` (default): the LLM gets the recent chat with a marker where the new report starts. `new_only`: the code sends only the messages since the bot's last one |
+| `DAILY_UPDATES_ONLY` | Optional. `False` (default): every weight and training report is saved as its own row, so a correction ("sorki, 81") adds a row; the newest row of a day is the current value. `True`: one row per day, a newer report overwrites it |
 | `HARDCODED_FIRST_MESSAGE` | Optional. `True` makes messages the bot starts come from `src/wabot/utils.py` instead of the LLM – useful without an API key |
 
 `.env` is gitignored; never commit it.

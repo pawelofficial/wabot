@@ -200,6 +200,15 @@ def test_plan_text_shows_ids_aliases_and_replacements():
     )
 
 
+def test_trainee_name_is_in_the_instructions_after_the_shared_rules():
+    instructions = assistant.build_instructions(None, "Kasia")
+    name_line = "Podopieczny, z którym rozmawiasz, ma na imię Kasia."
+    assert instructions.startswith(assistant.PROMPTS["system"])
+    assert name_line in instructions
+    assert "{trainee_name}" not in instructions
+    assert name_line not in assistant.build_instructions(None)
+
+
 def test_the_whole_catalog_is_not_in_the_instructions():
     plan = plans.TrainingPlan.model_validate(plan_with_day("Dzień A"))
     instructions = assistant.build_instructions(plan)
@@ -235,7 +244,7 @@ def test_bad_plans_are_rejected(plan, error):
 
 
 def test_instructions_without_a_plan_say_so():
-    instructions = assistant.build_instructions(None, "TASK")
+    instructions = assistant.build_instructions(None, task="TASK")
     assert assistant.PROMPTS["no_training_plan"] in instructions
     assert "<plan_treningowy>" not in instructions
     assert instructions.endswith("TASK")
