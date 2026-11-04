@@ -1,0 +1,114 @@
+# Upper/lower split on fixed weekdays, for an intermediate trainee building strength and mass.
+# Every exercise is an ID from src/wabot/exercises.yaml (see plans/example.yaml for the format).
+
+notes: |
+  Cel: siła i masa mięśniowa, +2,5 kg na głównych bojach co 2 tygodnie, jeśli wszystkie serie
+  wchodzą czysto.
+  4 treningi w tygodniu: poniedziałek, wtorek, czwartek, piątek. Środa, sobota i niedziela wolne
+  (spacer, mobilność).
+
+  Uwagi trenera:
+  - Przerwy 2–3 min na głównych bojach, 60–90 s na reszcie.
+  - Przy bólu kolana albo pleców nie robimy dnia na siłę – napisz, ustalimy zamiennik.
+  - Białko min. 160 g dziennie.
+
+days:
+  - name: Poniedziałek – góra 1
+    exercises:
+      - id: bench_press
+        sets: 4
+        reps: 5
+        weight: 80 kg
+        replacements: [incline_dumbbell_press]
+      - id: barbell_row
+        sets: 4
+        reps: 6
+        weight: 70 kg
+        replacements: [dumbbell_row]
+      - id: overhead_press
+        sets: 3
+        reps: 8
+        weight: 45 kg
+        replacements: [seated_dumbbell_press]
+      - id: lat_pulldown
+        sets: 3
+        reps: 10
+        weight: 60 kg
+        replacements: [pull_up]
+      - id: biceps_curl
+        sets: 3
+        reps: 12
+        weight: 30 kg
+
+  - name: Wtorek – dół 1
+    exercises:
+      - id: back_squat
+        sets: 4
+        reps: 5
+        weight: 100 kg
+        replacements: [leg_press]
+      - id: romanian_deadlift
+        sets: 3
+        reps: 8
+        weight: 80 kg
+        replacements: [good_morning]
+      - id: leg_curl
+        sets: 3
+        reps: 12
+        weight: 40 kg
+      - id: calf_raise
+        sets: 4
+        reps: 15
+
+  - name: Czwartek – góra 2
+    exercises:
+      - id: incline_dumbbell_press
+        sets: 4
+        reps: 8
+        weight: 2 x 28 kg
+        replacements: [bench_press]
+      - id: pull_up
+        sets: 4
+        reps: 6–8
+        replacements: [lat_pulldown]
+      - id: seated_dumbbell_press
+        sets: 3
+        reps: 10
+        weight: 2 x 20 kg
+        replacements: [overhead_press]
+      - id: dumbbell_row
+        sets: 3
+        reps: 10
+        weight: 32 kg
+        replacements: [barbell_row]
+      - id: triceps_pushdown
+        sets: 3
+        reps: 12
+      - id: lateral_raise
+        sets: 3
+        reps: 15
+        weight: 2 x 8 kg
+
+  - name: Piątek – dół 2
+    exercises:
+      - id: deadlift
+        sets: 3
+        reps: 5
+        weight: 130 kg
+        replacements: [romanian_deadlift]
+      - id: bulgarian_split_squat
+        sets: 3
+        reps: 8 na nogę
+        weight: 2 x 16 kg
+        replacements: [walking_lunge]
+      - id: leg_extension
+        sets: 3
+        reps: 12
+      - id: hip_thrust
+        sets: 3
+        reps: 10
+        weight: 100 kg
+        replacements: [glute_bridge]
+      - id: plank
+        sets: 3
+        reps: 60 s

@@ -1,0 +1,66 @@
+# Full body for a beginner, two workouts alternated (1, 2, 1, 2, ...) on any days of the week.
+# Every exercise is an ID from src/wabot/exercises.yaml (see plans/example.yaml for the format).
+
+notes: |
+  Cel: nauka techniki, ogólna sprawność i lekka redukcja.
+  2 treningi w tygodniu, na zmianę Trening 1 i Trening 2, w dowolne dni z min. 1 dniem przerwy.
+  Do tego 7–8 tys. kroków dziennie.
+
+  Uwagi trenera:
+  - Technika przed ciężarem: ciężar zwiększamy dopiero, gdy wszystkie serie są czyste.
+  - Przy bólu nadgarstka pompki można pominąć albo zrobić na podwyższeniu.
+  - Przy bólu pleców zamiast martwego ciągu rumuńskiego mostki biodrowe.
+
+days:
+  - name: Trening 1
+    exercises:
+      - id: goblet_squat
+        sets: 3
+        reps: 12
+        weight: 12–16 kg
+        replacements: [leg_press]
+      - id: glute_bridge
+        sets: 3
+        reps: 15
+        replacements: [hip_thrust]
+      - id: push_up
+        sets: 3
+        reps: 6–8
+        note: na kolanach albo od ławki
+        replacements: [incline_dumbbell_press]
+      - id: lat_pulldown
+        sets: 3
+        reps: 12
+        weight: 25–30 kg
+        replacements: [dumbbell_row]
+      - id: plank
+        sets: 3
+        reps: 20–30 s
+
+  - name: Trening 2
+    exercises:
+      - id: leg_press
+        sets: 3
+        reps: 12
+        weight: 50–60 kg
+        replacements: [goblet_squat]
+      - id: romanian_deadlift
+        sets: 3
+        reps: 10
+        weight: 2 x 8 kg
+        note: z hantlami
+        replacements: [glute_bridge]
+      - id: dumbbell_row
+        sets: 3
+        reps: 10
+        weight: 8–10 kg
+        replacements: [lat_pulldown]
+      - id: seated_dumbbell_press
+        sets: 3
+        reps: 10
+        weight: 2 x 5 kg
+        replacements: [lateral_raise]
+      - id: cycling
+        reps: 15 min
+        note: spokojnie, na koniec
+        replacements: [running]

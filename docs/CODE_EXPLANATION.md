@@ -23,6 +23,9 @@ A walk through what happens at runtime: which function calls which, in what orde
 | `src/wabot/config.py` | `Settings`: every value from `.env` |
 | `src/wabot/utils.py` | `hardcoded_first_message()`, a fixed text used instead of the LLM |
 | `plans/example.yaml` | Example training plan; `scripts/add_trainee.py` gives it to new trainees |
+| `plans/upper_lower.yaml`, `plans/beginner_fbw.yaml` | Two more real plans: an upper/lower split on fixed weekdays, and two alternating full-body workouts for a beginner |
+| `scenarios/*.yaml` | A month of reports per simulated trainee (Kasia, Tomek, Ola: one plan each, two trainers): the messages, the answer a correct model gives, and what must be saved. The format is explained at the top of `kasia.yaml` |
+| `src/wabot/simulation.py` | Replays the scenarios through `main.reply()` at simulated times (used by the month test and `scripts/simulate_month.py`, not by the app) |
 | `run.sh` | Local start: migrate, test message, tunnel, webhook, uvicorn |
 | `scripts/` | One-off command-line tools (see Flows 3 and 5) |
 
@@ -327,6 +330,8 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 | change the model | `OPENAI_MODEL` in `.env` (default in `config.py`) |
 | change the retry count | `ATTEMPTS` in `assistant.py` |
 | change plausibility limits | constants at the top of `llm_output.py` |
+| see how the real model handles a month of reports | `uv run python scripts/simulate_month.py` (`--only tomek` for one trainee): the 45 messages of `scenarios/*.yaml` in time order through `main.reply()` at simulated times, into `simulated_month.db` (never `wabot.db`), nothing sent to WhatsApp; prints each reply and what was saved, then each trainee's current values per day |
+| add a simulated trainee or message | a new `scenarios/<name>.yaml` (or a report in one): `text`, the answer a correct model gives, and `saved` where the code must change it; the month test checks it and the script sends it |
 
 ## Not built yet
 
@@ -341,4 +346,5 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 - `test_webhook.py`: Flow 1 through FastAPI's test client, with the LLM and `send_text` replaced by fakes: replies, dedup, unregistered numbers, saving, corrections, a failed save, a message followed up on. Its `add_trainee()` helper is used by the other test files.
 - `test_entries.py`: Flow 2b: one entry per day, corrections, out-of-order saves, exercises replaced.
 - `test_conversation.py`: the name trigger, history per trainee, `asked_again()`, plan injection and the plan text, bad plans, the example plan, `exercises.lookup()`, the trainee's local date, `scripts/add_trainee.py`.
+- `test_month_scenario.py`: the three trainees of `scenarios/` (15 reports each in October 2026, three plans, two trainers), interleaved in time order through the whole reply flow (`simulation.Replay` → `main.reply()` → `_complete()` with a fake OpenAI client returning the scenario's answer → `validate_output()` → `entries.save()`). After every message it checks that the model got only that trainee's messages and the simulated date, and what was saved: weight, plan day, status, missed exercises, exercise IDs and replacements. Runs in both `DAILY_UPDATES_ONLY` modes. Some answers say `done` where the code must make it `partial`.
 - `test_llm_output.py`: `validate_output()` accepting and rejecting outputs (incl. the checks against the plan's IDs and catalog matching by name), the retry in `_complete()` with a fake OpenAI client, the schema.

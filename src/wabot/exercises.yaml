@@ -67,7 +67,7 @@
 
 - id: seated_dumbbell_press
   name: Wyciskanie hantli nad głowę siedząc
-  aliases: [wyciskanie nad głowę, wyciskanie żołnierskie, ohp, barki z hantlami]
+  aliases: [wyciskanie hantli nad głowę, wyciskanie siedząc, barki z hantlami]
   group: barki
 
 - id: face_pull
@@ -114,3 +114,43 @@
   name: Rower
   aliases: [jazda na rowerze, rowerek, rower stacjonarny]
   group: cardio
+
+- id: overhead_press
+  name: Wyciskanie sztangi nad głowę
+  aliases: [ohp, wyciskanie żołnierskie, military press, wyciskanie nad głowę]
+  group: barki
+
+- id: lateral_raise
+  name: Unoszenie hantli bokiem
+  aliases: [wznosy bokiem, odwodzenie ramion, boczne, lateral raise]
+  group: barki
+
+- id: goblet_squat
+  name: Przysiad z hantlem (goblet)
+  aliases: [goblet, goblet squat, przysiad z hantlem, przysiad z kettlem]
+  group: nogi
+
+- id: leg_curl
+  name: Uginanie nóg na maszynie
+  aliases: [uginanie nóg, dwójki, leg curl]
+  group: nogi
+
+- id: leg_extension
+  name: Prostowanie nóg na maszynie
+  aliases: [prostowanie nóg, wyprosty, czwórki, leg extension]
+  group: nogi
+
+- id: calf_raise
+  name: Wspięcia na palce
+  aliases: [łydki, wspięcia, calf raise]
+  group: nogi
+
+- id: biceps_curl
+  name: Uginanie ramion ze sztangą
+  aliases: [biceps, uginanie ramion, curl]
+  group: ramiona
+
+- id: triceps_pushdown
+  name: Prostowanie ramion na wyciągu
+  aliases: [triceps, triceps na wyciągu, wypychanie liny, pushdown]
+  group: ramiona

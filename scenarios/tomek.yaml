@@ -1,0 +1,137 @@
+# A month of reports on a weekday plan; the format is explained in scenarios/kasia.yaml.
+
+name: Tomek
+trainer: Trener Marek
+phone: "48000000002"
+plan: plans/upper_lower.yaml
+
+reports:
+  - at: "2026-10-05 07:30"
+    text: yanek 88,6
+    weight: 88.6
+
+  - at: "2026-10-05 19:00"
+    text: "yanek góra 1 zrobiona: klata 4x5 80, wiosło 4x6 70, ohp 3x8 45, wyciąg 3x10 60, biceps 3x12 30"
+    training:
+      day: Poniedziałek
+      exercises:
+        - {id: bench_press, sets: 4, reps: "5", kg: 80}
+        - {id: barbell_row, sets: 4, reps: "6", kg: 70}
+        - {id: overhead_press, sets: 3, reps: "8", kg: 45}
+        - {id: lat_pulldown, sets: 3, reps: "10", kg: 60}
+        - {id: biceps_curl, sets: 3, reps: "12", kg: 30}
+
+  - at: "2026-10-06 20:00"
+    text: "yanek dół 1: przysiad 4x5 100, rdl 3x8 80, uginanie nóg 3x12 40"
+    training:
+      day: Wtorek
+      status: partial
+      exercises:
+        - {id: back_squat, sets: 4, reps: "5", kg: 100}
+        - {id: romanian_deadlift, sets: 3, reps: "8", kg: 80}
+        - {id: leg_curl, sets: 3, reps: "12", kg: 40}
+    saved: {status: partial, missed: [calf_raise]}
+
+  - at: "2026-10-08 19:30"
+    text: yanek góra 2 zrobiona cała wg planu
+    training: {day: Czwartek, exercises: all}
+
+  - at: "2026-10-09 18:00"
+    text: "yanek martwy 3x5 135 kg, nowy rekord! bułgary 3x8, wyprosty 3x12, hip thrust 3x10 100, deska 3x60s"
+    training:
+      day: Piątek
+      exercises:
+        - {id: deadlift, sets: 3, reps: "5", kg: 135}
+        - {id: bulgarian_split_squat, sets: 3, reps: "8"}
+        - {id: leg_extension, sets: 3, reps: "12"}
+        - {id: hip_thrust, sets: 3, reps: "10", kg: 100}
+        - {id: plank, sets: 3, reps: 60 s}
+      notes: nowy rekord w martwym ciągu
+
+  - at: "2026-10-12 07:30"
+    text: yanek 88,2
+    weight: 88.2
+
+  - at: "2026-10-12 19:00"
+    text: yanek zamiast ławki zrobiłem skos 4x8 30 bo ławka zajęta, reszta góry 1 wg planu
+    training:
+      day: Poniedziałek
+      exercises:
+        - {id: incline_dumbbell_press, sets: 4, reps: "8", kg: 30, replaces: bench_press}
+        - barbell_row
+        - overhead_press
+        - lat_pulldown
+        - biceps_curl
+
+  - at: "2026-10-13 21:00"
+    text: yanek dziś nie dam rady z dołem, kolano boli
+    training: {day: Wtorek, status: skipped, exercises: [], notes: ból kolana}
+    saved:
+      status: skipped
+      missed: [back_squat, romanian_deadlift, leg_curl, calf_raise]
+
+  - at: "2026-10-15 19:00"
+    text: "yanek góra 2: skos 4x8 2x28, podciąganie 4x7, barki z hantlami 3x10 2x20"
+    training:
+      day: Czwartek
+      status: partial
+      exercises:
+        - {id: incline_dumbbell_press, sets: 4, reps: "8", kg: 28}
+        - {id: pull_up, sets: 4, reps: "7"}
+        - {id: seated_dumbbell_press, sets: 3, reps: "10", kg: 20}
+    saved: {status: partial, missed: [dumbbell_row, triceps_pushdown, lateral_raise]}
+
+  - at: "2026-10-15 19:20"
+    text: yanek a, i jeszcze wiosło hantlem 3x10 32 i triceps na wyciągu 3x12 zrobiłem
+    # The full report so far replaces the first one.
+    training:
+      day: Czwartek
+      status: partial
+      exercises:
+        - {id: incline_dumbbell_press, sets: 4, reps: "8", kg: 28}
+        - {id: pull_up, sets: 4, reps: "7"}
+        - {id: seated_dumbbell_press, sets: 3, reps: "10", kg: 20}
+        - {id: dumbbell_row, sets: 3, reps: "10", kg: 32}
+        - {id: triceps_pushdown, sets: 3, reps: "12"}
+    saved: {status: partial, missed: [lateral_raise]}
+
+  - at: "2026-10-19 19:00"
+    text: yanek góra 1 wszystko zrobione, klata 4x5 82,5
+    training:
+      day: Poniedziałek
+      exercises:
+        - {id: bench_press, sets: 4, reps: "5", kg: 82.5}
+        - barbell_row
+        - overhead_press
+        - lat_pulldown
+        - biceps_curl
+
+  - at: "2026-10-20 08:00"
+    text: yanek 87,9, wczoraj wieczorem pizza ale trzymam się
+    weight: 87.9
+
+  - at: "2026-10-23 18:30"
+    text: "yanek dół 2: martwy 3x5 135, bułgary 3x8, hip thrust 3x10 100, deska"
+    training:
+      day: Piątek
+      status: partial
+      exercises:
+        - {id: deadlift, sets: 3, reps: "5", kg: 135}
+        - {id: bulgarian_split_squat, sets: 3, reps: "8"}
+        - {id: hip_thrust, sets: 3, reps: "10", kg: 100}
+        - plank
+    saved: {status: partial, missed: [leg_extension]}
+
+  - at: "2026-10-26 07:30"
+    text: yanek waga 88,1
+    weight: 88.1
+
+  - at: "2026-10-27 19:00"
+    text: yanek dół 1 zrobiony, przysiad 4x5 102,5, łydki 4x15, reszta jak w planie
+    training:
+      day: Wtorek
+      exercises:
+        - {id: back_squat, sets: 4, reps: "5", kg: 102.5}
+        - romanian_deadlift
+        - leg_curl
+        - {id: calf_raise, sets: 4, reps: "15"}

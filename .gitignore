@@ -226,3 +226,6 @@ wabot.db*
 temp.txt
 screen*.png
 .cloudflared.log
+
+# scripts/simulate_month.py output
+simulated_month.db*

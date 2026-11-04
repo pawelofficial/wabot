@@ -21,6 +21,7 @@ uv run ruff check . && uv run ruff format .
 uv run python scripts/add_trainee.py     # register WHATSAPP_TEST_RECIPIENT as a trainee (--help for options)
 uv run python scripts/send_test.py       # send a test template message
 uv run python scripts/send_test_custom_first_message.py [--dry-run]   # bot-started message, composed by the app
+uv run python scripts/simulate_month.py [--only kasia]  # scenarios/*.yaml through the real model into simulated_month.db (not wabot.db)
 ```
 
 ## Code layout
@@ -38,7 +39,8 @@ uv run python scripts/send_test_custom_first_message.py [--dry-run]   # bot-star
 - `src/wabot/llm_output.py` – pydantic models of the LLM output (the JSON schema sent to OpenAI is generated from them) and `validate_output()`: structure, plausible values, dates, plan days and exercise IDs that must be in the plan; IDs of exercises outside the plan come from the catalog by name
 - `src/wabot/exercises.yaml` + `exercises.py` – exercise catalog (fixed IDs, Polish names, aliases, muscle group); its IDs are the allowed values of `exercise_id` in the schema and of plan exercises; `lookup()` matches a name or alias. Not sent to the LLM as a whole. IDs are permanent once data uses them – add, don't rename
 - `src/wabot/plans.py` – training plans: pydantic models (days of catalog exercise IDs with sets/reps/weight and the trainer's allowed replacements, plus notes), `load()` a YAML file, `of(trainee)` from the db (JSON), `prompt_text()` for the LLM
-- `plans/example.yaml` – example training plan; `scripts/add_trainee.py` gives it to new trainees
+- `plans/example.yaml` – example training plan; `scripts/add_trainee.py` gives it to new trainees. `upper_lower.yaml` (fixed weekdays) and `beginner_fbw.yaml` (alternating workouts) are two more
+- `scenarios/*.yaml` + `src/wabot/simulation.py` – a month of reports per simulated trainee (messages, the correct model answer, what must be saved), replayed through `main.reply()` at simulated times by `tests/test_month_scenario.py` (canned answers) and `scripts/simulate_month.py` (real model)
 - `scripts/add_trainee.py` – registers or updates a trainee and their trainer until the dashboard exists
 - `alembic/` – migrations; `UTCDateTime` is rendered as plain `DateTime(timezone=True)`
 

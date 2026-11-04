@@ -99,6 +99,16 @@ uv run python scripts/send_test_custom_first_message.py --dry-run  # only print 
 
 The text is composed by the app: the LLM writes it, or `hardcoded_first_message()` in `src/wabot/utils.py` does when `HARDCODED_FIRST_MESSAGE=True`. What the LLM is told to write is in `src/wabot/prompts.yaml`. WhatsApp only delivers such free-form messages within 24 h of your last message to the bot – outside that window Meta accepts the request but drops the message, and the running bot logs error `131047`. Message the bot first.
 
+### Simulate a month of reports
+
+```bash
+uv run python scripts/simulate_month.py                       # 3 trainees x 15 reports, October 2026, real model
+uv run python scripts/simulate_month.py --only tomek           # one trainee
+uv run python scripts/simulate_month.py --daily-updates-only  # one row per day
+```
+
+The trainees and their messages are in `scenarios/*.yaml`: Kasia (`plans/example.yaml`), Tomek (`plans/upper_lower.yaml`) and Ola (`plans/beginner_fbw.yaml`). The script sends the messages in time order through the bot's reply flow at simulated times and prints each reply and what was saved. Uses the OpenAI key from `.env` (one call per message) and its own database, `simulated_month.db`, which is recreated on every run and kept afterwards. Nothing goes to WhatsApp and `wabot.db` isn't touched.
+
 ### Tests and lint
 
 ```bash

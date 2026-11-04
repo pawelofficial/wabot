@@ -256,6 +256,11 @@ def test_example_training_plan_is_valid():
     assert [d.name[:7] for d in plan.days] == ["Dzień A", "Dzień B", "Dzień C"]
 
 
+@pytest.mark.parametrize("path", sorted(Path("plans").glob("*.yaml")), ids=lambda p: p.stem)
+def test_every_plan_file_is_valid(path):
+    assert plans.load(path).days
+
+
 @pytest.mark.parametrize(
     ("name", "expected"),
     [("Siady", "back_squat"), ("  suwnica ", "leg_press"), ("Pompki", "push_up"), ("joga", None)],

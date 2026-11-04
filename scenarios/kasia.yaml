@@ -1,0 +1,139 @@
+# A month of one trainee's reports. scripts/simulate_month.py sends `text` to the real model;
+# tests/test_month_scenario.py gives the code the answer a correct model would return
+# (`reply`, `weight`, `training`) and checks what gets saved.
+#
+#   at:       local time (Europe/Warsaw) the message is sent
+#   weight:   kg, or {kg, date}; date defaults to the day of `at`
+#   training: day      – how the plan day's name starts; omit for training outside the plan
+#             date     – defaults to the day of `at`
+#             status   – what the model says (default done); the code may change it
+#             exercises – "all" (the whole plan day), or a list of catalog IDs or
+#                        {id, sets, reps, kg, replaces}, or {name} for something outside the catalog
+#             notes
+#   saved:    what the code must save where it differs from the answer: status, missed
+
+name: Kasia
+trainer: Trener Marek
+phone: "48000000001"
+plan: plans/example.yaml
+
+reports:
+  - at: "2026-10-02 08:00"
+    text: yanek waga 82,4
+    weight: 82.4
+
+  - at: "2026-10-02 19:00"
+    text: yanek zrobiłam dzień C, wszystko wg planu
+    training: {day: Dzień C, exercises: all}
+
+  - at: "2026-10-05 18:30"
+    text: "yanek A: przysiady 4x8 60kg, rdl 3x10 50, wykroki 3x10, hip thrust 3x12 70, deska 3x45s"
+    training:
+      day: Dzień A
+      exercises:
+        - {id: back_squat, sets: 4, reps: "8", kg: 60}
+        - {id: romanian_deadlift, sets: 3, reps: "10", kg: 50}
+        - {id: walking_lunge, sets: 3, reps: "10"}
+        - {id: hip_thrust, sets: 3, reps: "12", kg: 70}
+        - {id: plank, sets: 3, reps: 45 s}
+
+  - at: "2026-10-07 20:00"
+    text: yanek zrobiłam tylko klatę, bez bicepsu
+    # "done" on purpose: the rest of day B wasn't reported, so the code makes it partial.
+    training:
+      day: Dzień B
+      exercises: [incline_dumbbell_press]
+      notes: bez bicepsu
+    saved:
+      status: partial
+      missed: [barbell_row, seated_dumbbell_press, lat_pulldown, face_pull]
+
+  - at: "2026-10-09 07:45"
+    text: yanek 81,9 rano
+    weight: 81.9
+
+  - at: "2026-10-09 21:00"
+    text: yanek dziś odpuściłam trening, jestem chora
+    training: {day: Dzień C, status: skipped, exercises: [], notes: chora}
+    saved:
+      status: skipped
+      missed: [deadlift, push_up, bulgarian_split_squat, pull_up, farmers_walk]
+
+  - at: "2026-10-12 19:00"
+    text: yanek dzień A zrobiony, ale zamiast przysiadów suwnica 4x10 120kg
+    training:
+      day: Dzień A
+      exercises:
+        - {id: leg_press, sets: 4, reps: "10", kg: 120, replaces: back_squat}
+        - romanian_deadlift
+        - walking_lunge
+        - hip_thrust
+        - plank
+
+  - at: "2026-10-12 19:10"
+    text: yanek sorki, suwnica była 3x10
+    # A correction: the whole corrected session.
+    training:
+      day: Dzień A
+      exercises:
+        - {id: leg_press, sets: 3, reps: "10", kg: 120, replaces: back_squat}
+        - romanian_deadlift
+        - walking_lunge
+        - hip_thrust
+        - plank
+
+  - at: "2026-10-14 18:00"
+    text: "yanek B: skos 4x10 16kg, wiosłowanie 4x10 40kg, ściąganie drążka 3x12 45kg"
+    training:
+      day: Dzień B
+      status: partial
+      exercises:
+        - {id: incline_dumbbell_press, sets: 4, reps: "10", kg: 16}
+        - {id: barbell_row, sets: 4, reps: "10", kg: 40}
+        - {id: lat_pulldown, sets: 3, reps: "12", kg: 45}
+    saved: {status: partial, missed: [seated_dumbbell_press, face_pull]}
+
+  - at: "2026-10-17 10:00"
+    text: yanek waga 81,5, wczoraj zrobiłam C, tylko martwy i podciąganie
+    weight: 81.5
+    training:
+      day: Dzień C
+      date: 2026-10-16
+      status: partial
+      exercises: [deadlift, pull_up]
+    saved: {status: partial, missed: [push_up, bulgarian_split_squat, farmers_walk]}
+
+  - at: "2026-10-20 18:00"
+    text: yanek pobiegałam 5 km w 28 minut
+    training:
+      exercises: [{name: Bieg 5 km, reps: 28 min}]
+
+  - at: "2026-10-21 19:00"
+    text: yanek B zrobione, wyciskanie na płaskiej zamiast skosu 4x8 50kg
+    training:
+      day: Dzień B
+      exercises:
+        - {id: bench_press, sets: 4, reps: "8", kg: 50, replaces: incline_dumbbell_press}
+        - barbell_row
+        - seated_dumbbell_press
+        - lat_pulldown
+        - face_pull
+
+  - at: "2026-10-23 08:00"
+    text: yanek 81
+    weight: 81
+
+  - at: "2026-10-23 08:05"
+    text: yanek sorki 81,2
+    weight: 81.2
+
+  - at: "2026-10-26 19:00"
+    text: yanek A zrobiony, przysiady 4x8 62,5 kg, reszta wg planu
+    training:
+      day: Dzień A
+      exercises:
+        - {id: back_squat, sets: 4, reps: "8", kg: 62.5}
+        - romanian_deadlift
+        - walking_lunge
+        - hip_thrust
+        - plank

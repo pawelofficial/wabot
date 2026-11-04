@@ -1,0 +1,130 @@
+# A month of reports on a two-workout rotation plan (no fixed weekdays); the format is
+# explained in scenarios/kasia.yaml.
+
+name: Ola
+trainer: Trenerka Ewa
+phone: "48000000003"
+plan: plans/beginner_fbw.yaml
+
+reports:
+  - at: "2026-10-01 18:00"
+    text: "yanek hej! pierwszy trening za mną 😊 trening 1: goblet 3x12 z 12 kg, mostki 3x15, pompki na kolanach 3x6, wyciąg 3x12 25 kg, deska 3x20 s"
+    training:
+      day: Trening 1
+      exercises:
+        - {id: goblet_squat, sets: 3, reps: "12", kg: 12}
+        - {id: glute_bridge, sets: 3, reps: "15"}
+        - {id: push_up, sets: 3, reps: "6"}
+        - {id: lat_pulldown, sets: 3, reps: "12", kg: 25}
+        - {id: plank, sets: 3, reps: 20 s}
+
+  - at: "2026-10-02 08:30"
+    text: yanek waga 64,3
+    weight: 64.3
+
+  - at: "2026-10-04 11:00"
+    text: "yanek trening 2 zrobiony, suwnica 3x12 50 kg, rdl z hantlami 3x10 2x8 kg, wiosłowanie hantlem 3x10 8 kg, barki 3x10 2x5 kg, rower 15 min"
+    training:
+      day: Trening 2
+      exercises:
+        - {id: leg_press, sets: 3, reps: "12", kg: 50}
+        - {id: romanian_deadlift, sets: 3, reps: "10", kg: 8}
+        - {id: dumbbell_row, sets: 3, reps: "10", kg: 8}
+        - {id: seated_dumbbell_press, sets: 3, reps: "10", kg: 5}
+        - {id: cycling, reps: 15 min}
+
+  - at: "2026-10-07 19:00"
+    text: yanek zrobiłam trening 1 ale bez pompek, nadgarstek mnie boli, reszta jak w planie
+    training:
+      day: Trening 1
+      status: partial
+      exercises: [goblet_squat, glute_bridge, lat_pulldown, plank]
+      notes: ból nadgarstka
+    saved: {status: partial, missed: [push_up]}
+
+  - at: "2026-10-09 08:00"
+    text: yanek 64,0
+    weight: 64.0
+
+  - at: "2026-10-10 12:00"
+    text: yanek trening 2, zamiast rdl zrobiłam mostki 3x15 bo plecy, reszta zrobiona
+    training:
+      day: Trening 2
+      exercises:
+        - leg_press
+        - {id: glute_bridge, sets: 3, reps: "15", replaces: romanian_deadlift}
+        - dumbbell_row
+        - seated_dumbbell_press
+        - cycling
+      notes: plecy
+
+  - at: "2026-10-14 18:30"
+    text: "yanek trening 1: przysiad z hantlem 3x12 14 kg, mostki 3x15, wyciąg 3x12 27,5"
+    training:
+      day: Trening 1
+      status: partial
+      exercises:
+        - {id: goblet_squat, sets: 3, reps: "12", kg: 14}
+        - {id: glute_bridge, sets: 3, reps: "15"}
+        - {id: lat_pulldown, sets: 3, reps: "12", kg: 27.5}
+    saved: {status: partial, missed: [push_up, plank]}
+
+  - at: "2026-10-14 18:40"
+    text: yanek aa i deska 3x30 s też była
+    training:
+      day: Trening 1
+      status: partial
+      exercises:
+        - {id: goblet_squat, sets: 3, reps: "12", kg: 14}
+        - {id: glute_bridge, sets: 3, reps: "15"}
+        - {id: lat_pulldown, sets: 3, reps: "12", kg: 27.5}
+        - {id: plank, sets: 3, reps: 30 s}
+    saved: {status: partial, missed: [push_up]}
+
+  - at: "2026-10-17 10:00"
+    text: yanek dziś nie idę na siłkę, mam gości, przesuwam trening 2 na jutro
+    # Nothing to save: the plan has no fixed days, so a moved workout isn't a skipped one.
+
+  - at: "2026-10-18 12:00"
+    text: yanek trening 2 zrobiony! suwnica 3x12 55 kg 💪
+    training:
+      day: Trening 2
+      exercises:
+        - {id: leg_press, sets: 3, reps: "12", kg: 55}
+        - romanian_deadlift
+        - dumbbell_row
+        - seated_dumbbell_press
+        - cycling
+
+  - at: "2026-10-21 08:00"
+    text: yanek 63,6 kg 🎉
+    weight: 63.6
+
+  - at: "2026-10-21 19:00"
+    text: yanek byłam dziś na basenie, 40 min pływania
+    # Outside the plan and outside the catalog: no plan day, no exercise ID.
+    training:
+      exercises: [{name: Pływanie, reps: 40 min}]
+
+  - at: "2026-10-24 11:00"
+    text: "yanek trening 1: goblet 3x12 16 kg, mostki 3x15, pompki na kolanach 3x8, wyciąg 3x12 30, deska 3x30 s"
+    training:
+      day: Trening 1
+      exercises:
+        - {id: goblet_squat, sets: 3, reps: "12", kg: 16}
+        - {id: glute_bridge, sets: 3, reps: "15"}
+        - {id: push_up, sets: 3, reps: "8"}
+        - {id: lat_pulldown, sets: 3, reps: "12", kg: 30}
+        - {id: plank, sets: 3, reps: 30 s}
+
+  - at: "2026-10-28 18:00"
+    text: yanek trening 2 zrobiłam, ale bez roweru, reszta ok
+    training:
+      day: Trening 2
+      status: partial
+      exercises: [leg_press, romanian_deadlift, dumbbell_row, seated_dumbbell_press]
+    saved: {status: partial, missed: [cycling]}
+
+  - at: "2026-10-30 08:00"
+    text: yanek waga 63,4
+    weight: 63.4
