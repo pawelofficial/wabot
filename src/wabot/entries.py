@@ -17,6 +17,7 @@ import datetime as dt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from wabot import plans
 from wabot.llm_output import LlmOutput, Training, Weight
 from wabot.models import (
     Message,
@@ -38,7 +39,11 @@ def save(
 ) -> None:
     """Save the weight and training in output, reported in message (the one the bot answers).
     daily_updates_only: update the day's entry instead of adding a new one. now: when it's
-    saved, the current time if not given (the simulation passes its simulated time)."""
+    saved, the current time if not given (the simulation passes its simulated time).
+
+    `trainee` must be the object the output was made with (main.reply() passes the one the LLM
+    call read the plan from): the check-in records that plan version, the one its plan day and
+    missed exercises were checked against, even if the trainer changed the plan meanwhile."""
     now = now or utcnow()
     if output.weight is not None:
         _save_weight(session, trainee, message, output.weight, daily_updates_only, now)
@@ -123,6 +128,11 @@ def _save_training(
     )
     if checkin is None:
         return
+    checkin.plan_version_id = trainee.plan_version_id
+    # validate_output() matched plan_day to a day of this same version, by name.
+    plan = plans.of(trainee)
+    day = plan.day(training.plan_day) if plan is not None and training.plan_day else None
+    checkin.plan_day_id = day.id if day is not None else None
     checkin.plan_day = training.plan_day
     checkin.status = training.status
     checkin.missed_exercises = list(training.missed_exercises)

@@ -53,7 +53,7 @@
 {{ plan_cards(plan) }}
 {% else %}
 <div class="card empty-card">
-  <p>{{ trainee.name }} nie ma jeszcze planu treningowego. Bez planu Yanek zapisuje treningi tak, jak je opisano, ale nie wie, czego brakuje.</p>
+  <p>{{ trainee.name }} {{ 'nie ma teraz planu treningowego (wcześniejsze są w historii planów niżej)' if history else 'nie ma jeszcze planu treningowego' }}. Bez planu Yanek zapisuje treningi tak, jak je opisano, ale nie wie, czego brakuje.</p>
   <div class="plan-bar-actions start">
     <a class="button primary" href="/dashboard/trainees/{{ trainee.id }}/plan/edit">+ Utwórz plan</a>
     <span class="muted">albo</span>

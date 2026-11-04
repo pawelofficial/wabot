@@ -4,6 +4,7 @@ from sqlalchemy import (
     JSON,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     Text,
@@ -69,8 +70,21 @@ class Trainee(Base):
     """A trainer's client. The bot finds the trainee behind a message by the phone number."""
 
     __tablename__ = "trainees"
+    __table_args__ = (
+        # The current plan must be one of the trainee's own versions: (id, plan_version_id) is a
+        # (trainee_plans.trainee_id, trainee_plans.id) pair. trainees and trainee_plans point at
+        # each other, so this one is created after both tables (use_alter; SQLite has it inline).
+        ForeignKeyConstraint(
+            ["id", "plan_version_id"],
+            ["trainee_plans.trainee_id", "trainee_plans.id"],
+            name="fk_trainees_plan_version",
+            use_alter=True,
+        ),
+    )
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    # autoincrement: the id is also part of the foreign key above, which would otherwise make
+    # SQLAlchemy expect it to be given rather than generated.
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     trainer_id: Mapped[int] = mapped_column(ForeignKey("trainers.id"), index=True)
     # WhatsApp's form: digits only, with the country code (48123456789).
     phone: Mapped[str] = mapped_column(String(20), unique=True)
@@ -79,12 +93,28 @@ class Trainee(Base):
     timezone: Mapped[str] = mapped_column(String(50), default=DEFAULT_TIMEZONE)
     # The day the trainee signed the paper consent, which the trainer keeps on file.
     consent_date: Mapped[dt.date]
-    # Days of catalog exercises with their replacements, as JSON; read and checked through
-    # plans.of(trainee), injected into the LLM's prompt.
-    training_plan: Mapped[dict | None] = mapped_column(JSON)
+    # The current training plan: one of the trainee's versions (trainee_plans), set only by
+    # plan_history; null when the trainee has no plan. The plan itself is stored once, in the
+    # version; plans.of(trainee) reads it for the bot's prompt and the dashboard.
+    plan_version_id: Mapped[int | None]
     created_at: Mapped[dt.datetime] = mapped_column(UTCDateTime, default=utcnow)
 
     trainer: Mapped[Trainer] = relationship()
+    # Loaded together with the trainee (lazy="joined"), so the plan can be read after the
+    # session is closed (main.reply() reads the trainee, then calls the LLM). post_update: the
+    # trainee is written first, then the version, then the pointer.
+    plan_version: Mapped["TraineePlan | None"] = relationship(
+        primaryjoin="Trainee.plan_version_id == TraineePlan.id",
+        foreign_keys="Trainee.plan_version_id",
+        post_update=True,
+        lazy="joined",
+    )
+
+    def __init__(self, **fields):
+        # A new trainee has no plan until plan_history.assign() gives one, and plans.of() can
+        # say so even after the session is closed (nothing left to load).
+        fields.setdefault("plan_version", None)
+        super().__init__(**fields)
 
 
 class Message(Base):
@@ -131,13 +161,29 @@ class TrainingCheckin(Base):
     (see WeightEntry); the newest one is the current session."""
 
     __tablename__ = "training_checkins"
-    __table_args__ = (Index("ix_training_checkins_trainee_id_date", "trainee_id", "date"),)
+    __table_args__ = (
+        Index("ix_training_checkins_trainee_id_date", "trainee_id", "date"),
+        # The plan version must be one of the trainee's own.
+        ForeignKeyConstraint(
+            ["trainee_id", "plan_version_id"],
+            ["trainee_plans.trainee_id", "trainee_plans.id"],
+            name="fk_training_checkins_plan_version",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     trainer_id: Mapped[int] = mapped_column(ForeignKey("trainers.id"), index=True)
     trainee_id: Mapped[int] = mapped_column(ForeignKey("trainees.id"))
     date: Mapped[dt.date]
-    # The day's name exactly as in the plan; null for training outside the plan.
+    # The trainee's plan version when this was saved: the plan the report was checked against,
+    # which plan_day and missed_exercises refer to (the plan can change later). Null when the
+    # trainee had no plan.
+    plan_version_id: Mapped[int | None]
+    # The plan day it was: its ID (plans.PlanDay.id), which stays the same when the trainer
+    # renames the day or changes the plan around it, so trainings of one day can be found across
+    # plan versions; and its name exactly as in that version, as the trainee saw it. Both null
+    # for training outside the plan.
+    plan_day_id: Mapped[str | None] = mapped_column(String(32))
     plan_day: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(10))  # done, partial or skipped
     # Catalog IDs of the day's plan exercises the trainee said they didn't do.
@@ -196,11 +242,15 @@ class PlanTemplate(Base):
 
 class TraineePlan(Base):
     """One version of a trainee's training plan. Every change (an edit, a plan from the library,
-    a restored older version) adds a row; the newest is the current plan, which is also kept in
-    trainees.training_plan for the bot. Written only by plan_history.assign()."""
+    a restored older version) adds a row, and trainees.plan_version_id points to the current one
+    (the newest, unless the plan was removed). Written only by plan_history. Check-ins point to
+    the version they were saved against."""
 
     __tablename__ = "trainee_plans"
-    __table_args__ = (Index("ix_trainee_plans_trainee_id_id", "trainee_id", "id"),)
+    # (trainee_id, id) is unique anyway (id is); the constraint lets trainees and
+    # training_checkins point to "this trainee's version" with a foreign key, and its index serves
+    # the history (a trainee's versions by id).
+    __table_args__ = (UniqueConstraint("trainee_id", "id", name="uq_trainee_plans_trainee_id_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     trainer_id: Mapped[int] = mapped_column(ForeignKey("trainers.id"), index=True)

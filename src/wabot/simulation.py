@@ -112,7 +112,7 @@ def register(scenario: Scenario) -> Trainee:
             )
             session.add(template)
             session.flush()
-        elif template.plan != plans.to_db(scenario.plan):
+        elif TrainingPlan.model_validate(template.plan).without_day_ids() != scenario.plan:
             raise ValueError(f"{scenario.key}: {scenario.plan_name} is another plan already")
         version = plan_history.assign(session, trainee, scenario.plan, "template", template)
         version.created_at = PLANS_SET_UP_AT

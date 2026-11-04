@@ -14,7 +14,7 @@ Priorities:
 - **1.1** – bot messages before the trainee's first one go to the model as a developer note, so it sees the reminder it's answering.
 - **1.3** – letters that are in the trainee's name or messages are allowed in the reply.
 - **1.4** – the OpenAI client has a 60 s timeout and one retry (only that part of 1.4).
-- **2.1 (the two bugs only)** – "unchanged" counts only while the trainee has a plan; `--no-plan` for a new trainee leaves no version. The plan is still stored twice.
+- **2.1 and 2.2** – `trainees.training_plan` (a copy of the current plan) is replaced by `trainees.plan_version_id`, a pointer to the trainee's own version; each check-in points to the version it was checked against (`training_checkins.plan_version_id`). Both are two-column foreign keys, so the database refuses another trainee's version. Migration 0007, tested on rows in the old shape and on copies of both local databases.
 - **2.3** – decided: a trainee never moves to another trainer. `add_trainee.py --trainer` refuses to change an existing trainee's trainer; the library shows only the trainer's current trainees and `current_version()` filters by trainer, as a safeguard.
 - **2.5** – a restore or assign that changes nothing adds no version ("Podopieczny ma już ten plan z biblioteki").
 - **2.6** – `tests/test_schema.py` fails when an ID disappears (`tests/catalog_ids.txt`).
@@ -26,7 +26,7 @@ Priorities:
 - **6.2** – `simulate_month.py` deletes the `-wal`/`-shm` files too, and says to stop the dashboard when the file is in use.
 - **8** – the out-of-date lines in PLAN.md.
 
-Still open: everything else below, notably 1.2 (the "handled" state), 2.1/2.2 (one source for the plan, check-ins linked to versions), 2.7, 3.1's proxy and session points, 4.2.
+Still open: everything else below, notably 1.2 (the "handled" state), 2.7, 3.1's proxy and session points, 4.2.
 
 ## Top of the list
 
@@ -36,8 +36,8 @@ Still open: everything else below, notably 1.2 (the "handled" state), 2.1/2.2 (o
 | 1.2 | "Already handled" is guessed from the bot's last outgoing message: a failed send duplicates a report, an apology loses one – verified | P1 |
 | 2.3 | A trainee moved to another trainer: the old trainer's library still shows them by name; the new trainer sees none of their history – verified | P1 (the leak) / P2 |
 | 5.1 | Tests read your `.env`, so their result can depend on your local settings | P2 |
-| 2.1 | The current plan is stored twice (`trainees.training_plan` and the newest `trainee_plans` row), and they can disagree – verified | P2 |
-| 2.2 | Check-ins don't record which plan version they were saved against | P2, decide before Treningi |
+| 2.1 | The current plan is stored twice (`trainees.training_plan` and the newest `trainee_plans` row), and they can disagree – verified | ✅ fixed |
+| 2.2 | Check-ins don't record which plan version they were saved against | ✅ fixed |
 | 1.3 | A non-Latin letter in a reply (e.g. a Ukrainian name) makes every reply fail – verified | P2 |
 | 2.6 | "Exercise IDs are permanent" isn't enforced; renaming one breaks every plan that uses it | P2 |
 | 4.1 | No test runs the migrations | P2 |
@@ -102,7 +102,7 @@ This is also the base milestone 4 (corrections) needs.
 
 ## 2. Data model
 
-### 2.1 The current plan is stored twice (verified, P2)
+### 2.1 The current plan is stored twice (verified) – ✅ fixed (migration 0007)
 
 `trainees.training_plan` (what the bot reads) and the newest `trainee_plans` row are meant to be the same, but nothing enforces it. The code already works around this with `trainee.training_plan is not None` checks in `plan_pages.py` and `plan.html`.
 
@@ -111,19 +111,20 @@ Bugs from it, both verified:
   - **Probe:** "version added: None | trainee has a plan: False".
 - **A new trainee registered with `--no-plan` gets the example plan in their history:** it's assigned, then removed.
 
-**Fix (recommended):**
-- **Point at the version instead of copying it:** replace the JSON column with `trainees.plan_version_id`, a foreign key to `trainee_plans.id` (null means no plan). The bot reads the plan through it.
-- **Make removing a plan an action:** "no plan" becomes a state instead of a missing row, done with `plan_history.remove()`.
-- **Migration:** set `plan_version_id` to the newest version wherever `training_plan` isn't null.
+**Decided (2026-11-04): Kasia's row points to her current version.** `trainees.training_plan` (the whole plan copied again) becomes `trainees.plan_version_id`, a foreign key to `trainee_plans.id`. The plan itself is stored once, in `trainee_plans`.
+- **The bot** reads the plan of the version the pointer names.
+- **No plan:** the pointer is null; the history stays as it is.
+- **Only her own versions:** a two-column foreign key, (`plan_version_id`, `id`) → `trainee_plans` (`id`, `trainee_id`), so the database refuses a pointer to another trainee's version.
+- **`plan_history.assign()`** adds the version and moves the pointer, in one transaction; removing a plan sets it to null.
+- **Migration:** each trainee with a plan points to their newest version; then the JSON column is dropped.
+- **Built 2026-11-04** together with 2.2. `plan_history.remove()` replaces setting the column to null.
 
-Smaller alternative: keep the column, but send `--no-plan` through `plan_history`, compare "unchanged" against the column, and add a test that the two agree.
-
-### 2.2 Check-ins don't record which plan they were saved against (P2, decide before Treningi)
+### 2.2 Check-ins don't record which plan they were saved against – ✅ fixed (migration 0007)
 
 `training_checkins.plan_day` is the day's name as text. `missed_exercises` and `status` were computed from the plan as it was at that moment. Plan versions now exist, so a check-in can point at one.
 - **Fix:** add `training_checkins.plan_version_id`, the version that was current when the check-in was saved.
 - **What it gives the calendar:** it can show the right day and "4/5, brak: plank" after the plan changes.
-- **Day IDs:** the stable day ID planned with the calendar becomes a lookup inside that version.
+- **Day IDs:** ✅ built 2026-11-04 (migration 0008). Every plan day has an ID that stays through renames and copies, and check-ins store it (`plan_day_id`).
 
 ### 2.3 Moving a trainee to another trainer (verified, P1 for the leak) – ✅ fixed: decided that a trainee never moves
 
@@ -291,8 +292,8 @@ Messages get the simulated time, but `weight_entries` and `training_checkins` ta
 These aren't bugs, but several later features depend on them.
 
 1. **A "handled" state on inbound messages (1.2).** Retries, reminders and corrections build on it. Recommended before milestone 4.
-2. **One place for the current plan (2.1):** a foreign key to the version, or keep the copy and guard it.
-3. **Check-ins linked to a plan version, plus stable day IDs (2.2).** Together with the calendar.
+2. ~~**One place for the current plan (2.1)**~~ – done: `trainees.plan_version_id` points to the current version.
+3. ~~**Stable day IDs (2.2)**~~ – done: `PlanDay.id`, kept through renames and library copies; check-ins store it (`plan_day_id`).
 4. **Two sessions on one day** (already open in PLAN.md). This blocks the calendar and affects "the newest row of the day wins" everywhere.
 5. ~~**Moving trainees between trainers (2.3)**~~ – decided: never.
 6. **Trainers' own exercises vs the fixed catalog type (2.7).**
@@ -312,7 +313,7 @@ These aren't bugs, but several later features depend on them.
 
 1. **1.1 and 1.2, with tests.** They lose or duplicate trainees' data today.
 2. **The `users_of()` / `current_version()` filters (2.3) and `.env` in tests (5.1).** Both are small.
-3. **2.1 and 2.2 together, as part of the Treningi calendar (dashboard step 4).** That's where check-ins and plan versions meet.
+3. ~~**2.1 and 2.2**~~ – done (2026-11-04).
 4. **The migration test (4.1) and the catalog ID snapshot (2.6).**
 5. **3.1, 1.4 and 4.2 before production.**
 6. **The rest** when you're working on the code it's in.

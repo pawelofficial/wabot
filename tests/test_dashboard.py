@@ -299,7 +299,8 @@ def give_plan(trainee, plan_file="upper_lower.yaml"):
 
 def stored_plan(trainee):
     with SessionLocal() as session:
-        return session.get(Trainee, trainee.id).training_plan
+        version = session.get(Trainee, trainee.id).plan_version
+        return version.plan if version else None
 
 
 def edited(**changes):
@@ -339,7 +340,8 @@ def test_a_trainee_without_a_plan_gets_a_create_button_and_one_empty_day(client,
     assert "nie ma jeszcze planu" in page and "Utwórz plan" in page
     page = client.get(f"/dashboard/trainees/{people['Kasia'].id}/plan/edit").text
     assert "Nowy plan – Kasia" in page
-    assert page.count("data-day>") == 2  # the one day, and the template for "+ Dodaj dzień"
+    # The one day and the template for "+ Dodaj dzień", neither with an ID yet.
+    assert page.count('data-day data-day-id="">') == 2
 
 
 def test_the_editor_starts_with_the_trainees_plan(client, settings, people):
@@ -379,9 +381,10 @@ def test_a_new_plan_can_be_saved(client, settings, people):
         {"notes": "", "days": [{"name": "A", "exercises": [{"id": "plank", "reps": "45 s"}]}]}
     )
     assert save(client, people["Kasia"], plan_json).status_code == 303
-    assert stored_plan(people["Kasia"]) == {
-        "days": [{"name": "A", "exercises": [{"id": "plank", "reps": "45 s"}]}]
-    }
+    stored = stored_plan(people["Kasia"])
+    day_id = stored["days"][0].pop("id")  # the new day got an ID when it was stored
+    assert len(day_id) == 8
+    assert stored == {"days": [{"name": "A", "exercises": [{"id": "plank", "reps": "45 s"}]}]}
 
 
 @pytest.mark.parametrize(
@@ -686,7 +689,7 @@ def test_a_change_that_changes_nothing_adds_no_version(client, settings, people)
 def test_a_removed_plan_comes_back_when_the_same_plan_is_saved(client, settings, people):
     give_plan(people["Kasia"])
     with SessionLocal() as session:  # as scripts/add_trainee.py --no-plan does
-        session.get(Trainee, people["Kasia"].id).training_plan = None
+        plan_history.remove(session, session.get(Trainee, people["Kasia"].id))
         session.commit()
     sign_in(client, people["Trener Marek"])
     response = save(client, people["Kasia"], edited())
@@ -716,3 +719,88 @@ def test_the_dev_login_refuses_to_run_on_cloud_run(monkeypatch):
     with pytest.raises(ValueError, match="DASHBOARD_DEV_LOGIN"):
         Settings(dashboard_dev_login=True)
     assert not Settings().dashboard_dev_login
+
+
+# Plan day IDs
+
+
+def day_ids(plan: dict) -> dict[str, str]:
+    return {d["name"]: d["id"] for d in plan["days"]}
+
+
+def editor_data(trainee) -> dict:
+    """What the editor page starts with for the trainee (edit_trainee_plan), day IDs included."""
+    with SessionLocal() as session:
+        return plan_editor.form_data(plans.of(session.get(Trainee, trainee.id)))
+
+
+def test_a_plan_day_keeps_its_id_when_renamed_or_moved(client, settings, people):
+    give_plan(people["Kasia"])
+    sign_in(client, people["Trener Marek"])
+    before = day_ids(stored_plan(people["Kasia"]))
+    page = client.get(f"/dashboard/trainees/{people['Kasia'].id}/plan/edit").text
+    assert f'data-day-id="{before["Wtorek – dół 1"]}"' in page  # the form carries the IDs
+    # Rename the first day and move it to the end, as the editor sends it.
+    data = editor_data(people["Kasia"])
+    data["days"][0]["name"] = "Poniedziałek – klatka i plecy"
+    data["days"].append(data["days"].pop(0))
+    assert save(client, people["Kasia"], json.dumps(data)).status_code == 303
+    after = day_ids(stored_plan(people["Kasia"]))
+    assert after["Poniedziałek – klatka i plecy"] == before["Poniedziałek – góra 1"]
+    assert after["Wtorek – dół 1"] == before["Wtorek – dół 1"]
+    assert list(after)[-1] == "Poniedziałek – klatka i plecy"
+
+
+def test_a_new_day_gets_a_new_id_and_a_day_added_again_its_old_one(client, settings, people):
+    give_plan(people["Kasia"])
+    sign_in(client, people["Trener Marek"])
+    before = day_ids(stored_plan(people["Kasia"]))
+    data = editor_data(people["Kasia"])
+    # "Wtorek – dół 1" deleted and added again (no ID, as a day added in the editor), and a
+    # day that's new.
+    tuesday = data["days"].pop(1)
+    data["days"].append({**tuesday, "id": ""})
+    new_day = {"id": "", "name": "Sobota – cardio", "exercises": [{"id": "running"}]}
+    data["days"].append(new_day)
+    assert save(client, people["Kasia"], json.dumps(data)).status_code == 303
+    after = day_ids(stored_plan(people["Kasia"]))
+    assert after["Wtorek – dół 1"] == before["Wtorek – dół 1"]
+    assert after["Sobota – cardio"] not in before.values()
+
+
+def test_a_tampered_day_id_is_an_error(client, settings, people):
+    give_plan(people["Kasia"])
+    sign_in(client, people["Trener Marek"])
+    data = editor_data(people["Kasia"])
+    data["days"][1]["id"] = data["days"][0]["id"]  # two days with one ID
+    response = save(client, people["Kasia"], json.dumps(data))
+    assert response.status_code == 422
+    assert "Nie udało się rozpoznać dnia, odśwież stronę" in response.text
+    data["days"][1]["id"] = "<script>"
+    response = save(client, people["Kasia"], json.dumps(data))
+    assert response.status_code == 422
+    assert "Dzień 2 „Wtorek – dół 1”: nie udało się rozpoznać dnia" in response.text
+
+
+def test_library_plans_pass_their_day_ids_on(client, settings, people):
+    sign_in(client, people["Trener Marek"])
+    response = client.post(
+        "/dashboard/plans/new",
+        data={"name": "FBW", "plan": library_json("Trening 1")},
+        follow_redirects=False,
+    )
+    template_id = int(response.headers["location"].rsplit("/", 1)[1])
+    with SessionLocal() as session:
+        library = day_ids(session.get(PlanTemplate, template_id).plan)
+    # Edited in the library: the day keeps its ID (the editor sends it back).
+    data = json.loads(library_json("Trening A"))
+    data["days"][0]["id"] = library["Trening 1"]
+    client.post(
+        f"/dashboard/plans/{template_id}/edit", data={"name": "FBW", "plan": json.dumps(data)}
+    )
+    # Assigned to two trainees: both get the library plan's day IDs.
+    for trainee in (people["Kasia"], people["Tomek"]):
+        client.post(
+            f"/dashboard/trainees/{trainee.id}/plan/assign", data={"template_id": template_id}
+        )
+        assert day_ids(stored_plan(trainee)) == {"Trening A": library["Trening 1"]}

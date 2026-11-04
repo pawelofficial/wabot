@@ -7,7 +7,7 @@ import pytest
 from wabot import assistant, exercises, llm_output, plans
 from wabot.config import Settings
 from wabot.llm_output import InvalidOutputError, validate_output
-from wabot.models import DEFAULT_TIMEZONE, Trainee, utcnow
+from wabot.models import DEFAULT_TIMEZONE, Trainee, TraineePlan, utcnow
 from wabot.plans import TrainingPlan
 
 TODAY = dt.date(2026, 11, 3)
@@ -31,7 +31,8 @@ PLAN = TrainingPlan.model_validate(
         ]
     }
 )
-TRAINEE = Trainee(training_plan=plans.to_db(PLAN), timezone=DEFAULT_TIMEZONE)
+# Not in the database: the plan version is only attached, as plans.of() reads it.
+TRAINEE = Trainee(plan_version=TraineePlan(plan=plans.to_db(PLAN)), timezone=DEFAULT_TIMEZONE)
 
 
 def output(**overrides) -> dict:

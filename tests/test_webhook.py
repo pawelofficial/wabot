@@ -6,17 +6,18 @@ import json
 import pytest
 from sqlalchemy import select
 
-from wabot import assistant, entries, main, plans, trainees, whatsapp
+from wabot import assistant, entries, main, plan_history, plans, trainees, whatsapp
 from wabot.config import Settings
 from wabot.db import SessionLocal
-from wabot.llm_output import LlmOutput, Weight
-from wabot.models import Message, Trainee, WeightEntry, utcnow
+from wabot.llm_output import Exercise, LlmOutput, Training, Weight
+from wabot.models import Message, Trainee, TrainingCheckin, WeightEntry, utcnow
+from wabot.plans import TrainingPlan
 
 PHONE = "48111222333"
 
 
 def plan_with_day(name: str) -> dict:
-    """A one-day plan as stored in trainees.training_plan."""
+    """A one-day plan as stored in a plan version (trainee_plans.plan)."""
     return {"days": [{"name": name, "exercises": [{"id": "back_squat", "sets": 4, "reps": "6"}]}]}
 
 
@@ -30,8 +31,9 @@ def add_trainee(phone: str = PHONE, plan: dict | None = PLAN, trainer: str = "Tr
             phone=phone,
             name="Ania",
             consent_date=dt.date(2026, 11, 1),
-            training_plan=plan,
         )
+        if plan is not None:
+            plan_history.assign(session, trainee, TrainingPlan.model_validate(plan), "script")
         session.add(trainee)
         session.commit()
         return trainee
@@ -302,3 +304,42 @@ def test_a_message_the_trainee_followed_up_on_is_not_answered(sent, trainee, llm
     main.reply(second.id)
     assert [e.kg for e in stored_weights()] == [81.0]
     assert len(sent) == 1
+
+
+def test_a_checkin_keeps_the_plan_version_the_reply_was_made_with(
+    client, sent, monkeypatch, trainee
+):
+    """The trainer changes the plan while the LLM is answering: the check-in records the
+    version the report was checked against, not the newer one."""
+
+    def answer_while_the_plan_changes(settings, current, history, now):
+        with SessionLocal() as session:
+            plan_history.assign(
+                session,
+                session.get(Trainee, current.id),
+                TrainingPlan.model_validate(plan_with_day("Dzień B")),
+                "edited",
+            )
+            session.commit()
+        squat = Exercise(
+            exercise_id="back_squat",
+            name="Przysiad ze sztangą",
+            in_plan=True,
+            sets=4,
+            reps="6",
+            weight_kg=None,
+            replaces=None,
+            comment=None,
+        )
+        training = Training(
+            date=utcnow().date(), plan_day="Dzień A", status="done", exercises=[squat], notes=None
+        )
+        return LlmOutput(reply="Zapisałem Dzień A.", weight=None, training=training)
+
+    monkeypatch.setattr(assistant, "generate_reply", answer_while_the_plan_changes)
+    post_signed(client, text_payload("wamid.1", "yanek dzień A zrobiony"))
+    with SessionLocal() as session:
+        [checkin] = session.scalars(select(TrainingCheckin)).all()
+        now_current = session.get(Trainee, trainee.id).plan_version_id
+    assert checkin.plan_version_id == trainee.plan_version_id
+    assert now_current != trainee.plan_version_id

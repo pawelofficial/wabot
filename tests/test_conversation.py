@@ -36,7 +36,9 @@ def add_message(
 
 
 def unsaved_trainee(plan: dict | None = None) -> Trainee:
-    return Trainee(phone=PHONE, training_plan=plan, timezone=DEFAULT_TIMEZONE)
+    # Not in the database: the plan version is only attached, as plans.of() reads it.
+    version = TraineePlan(plan=plan) if plan is not None else None
+    return Trainee(phone=PHONE, plan_version=version, timezone=DEFAULT_TIMEZONE)
 
 
 def test_hardcoded_first_message_skips_the_llm(monkeypatch):
@@ -357,14 +359,16 @@ def test_add_trainee_registers_and_then_updates(monkeypatch, capsys):
             "Ania",
             "Trener testowy",
         )
-        assert plans.of(trainee) == plans.load(EXAMPLE_PLAN)
+        stored = plans.of(trainee)
+        assert stored.without_day_ids() == plans.load(EXAMPLE_PLAN)
+        assert all(day.id for day in stored.days)  # stored plans always have day IDs
         assert trainee.consent_date == dt.date.today()
 
     run_add_trainee(monkeypatch, "--phone", PHONE, "--no-plan", "--trainer", "Trener testowy")
     with SessionLocal() as session:
         trainee = session.scalar(select(Trainee))
         # Only what was passed changes.
-        assert (trainee.name, trainee.training_plan, trainee.trainer.name) == (
+        assert (trainee.name, trainee.plan_version, trainee.trainer.name) == (
             "Ania",
             None,
             "Trener testowy",
@@ -400,5 +404,14 @@ def test_add_trainee_sets_the_trainers_email(monkeypatch):
 def test_add_trainee_without_a_plan_leaves_no_plan_in_the_history(monkeypatch):
     run_add_trainee(monkeypatch, "--phone", PHONE, "--no-plan")
     with SessionLocal() as session:
-        assert session.scalar(select(Trainee)).training_plan is None
+        assert session.scalar(select(Trainee)).plan_version is None
         assert session.scalars(select(TraineePlan)).all() == []
+
+
+def test_add_trainee_with_the_same_plan_again_keeps_its_day_ids(monkeypatch):
+    run_add_trainee(monkeypatch, "--phone", PHONE)
+    run_add_trainee(monkeypatch, "--phone", PHONE, "--plan", str(EXAMPLE_PLAN))
+    with SessionLocal() as session:
+        versions = session.scalars(select(TraineePlan)).all()
+    # The YAML file has no day IDs; the days take theirs by name, so nothing changed.
+    assert len(versions) == 1

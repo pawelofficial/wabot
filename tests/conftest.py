@@ -36,7 +36,13 @@ from wabot.models import Base  # noqa: E402
 def fresh_db():
     Base.metadata.create_all(engine)
     yield
-    Base.metadata.drop_all(engine)
+    # trainees and trainee_plans point at each other (the current plan version), so with
+    # foreign keys on, SQLite can drop neither while they have rows.
+    with engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        Base.metadata.drop_all(connection)
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        connection.commit()
 
 
 @pytest.fixture

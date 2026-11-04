@@ -1,12 +1,14 @@
 """A trainee's training plans over time, and the trainer's plan library.
 
 Every change to a trainee's plan goes through assign(): it adds a TraineePlan row (the version)
-and sets trainees.training_plan, the copy the bot reads (plans.of()). So the newest version is
-always the current plan, and earlier ones can be looked at and restored.
+and points the trainee to it (trainees.plan_version_id), which is what the bot reads
+(plans.of()). The plan is stored once, in the version. Earlier versions can be looked at and
+restored (as a new version); remove() leaves the trainee without a plan, and the versions stay.
 
 A library plan (PlanTemplate) belongs to the trainer, not a trainee. Assigning it copies the
 plan into a new version: editing or deleting the library plan later doesn't change the trainees
-who got it, and their trainings stay saved against the plan they really had.
+who got it, and their trainings stay saved against the plan they really had (each check-in
+points to its version, training_checkins.plan_version_id).
 """
 
 from sqlalchemy import select
@@ -40,16 +42,23 @@ def assign(
 
     Nothing changes (returns None) when the trainee already has exactly this plan, with the
     same link: an edit without changes, restoring a version equal to the current plan,
-    assigning the library plan they already have. The caller commits."""
+    assigning the library plan they already have. The caller commits.
+
+    Days keep their IDs (plans.with_day_ids()); a day without one takes it from the day with
+    the same name in the library plan, the version it's based on, or the trainee's earlier
+    versions, newest first."""
     if source not in SOURCES:
         raise ValueError(f"unknown plan source {source!r}")
-    # A trainee being registered gets its id, a changed trainer its trainer_id.
+    # A trainee being registered gets its id.
     session.add(trainee)
     session.flush()
-    data = plans.to_db(plan)
-    current = current_version(session, trainee)
+    current = trainee.plan_version
     if source == "edited":
         based_on = current
+    earlier = [x.plan for x in (template, based_on) if x is not None]
+    earlier += [v.plan for v in history(session, trainee)]
+    plan = plans.with_day_ids(plan, [TrainingPlan.model_validate(p) for p in earlier])
+    data = plans.to_db(plan)
     if template is not None:
         template_id, name = template.id, template.name
     elif based_on is not None:
@@ -59,7 +68,6 @@ def assign(
         template_id = name = None
     unchanged = (
         current is not None
-        and trainee.training_plan == data
         and current.plan == data
         and (current.template_id, current.name) == (template_id, name)
     )
@@ -73,10 +81,18 @@ def assign(
         template_id=template_id,
         name=name,
     )
-    trainee.training_plan = data
     session.add(version)
     session.flush()
+    trainee.plan_version = version
+    session.flush()
     return version
+
+
+def remove(session: Session, trainee: Trainee) -> None:
+    """The trainee has no plan from now on; their versions stay in the history (and can be
+    restored). The caller commits."""
+    trainee.plan_version = None
+    session.flush()
 
 
 def restore(session: Session, trainee: Trainee, version: TraineePlan) -> TraineePlan | None:
@@ -98,19 +114,6 @@ def history(session: Session, trainee: Trainee) -> list[TraineePlan]:
             .order_by(TraineePlan.id.desc())
         )
     )
-
-
-def current_version(session: Session, trainee: Trainee) -> TraineePlan | None:
-    """The trainee's newest version (with the trainee's current trainer, like history())."""
-    return session.scalars(
-        select(TraineePlan)
-        .where(
-            TraineePlan.trainee_id == trainee.id,
-            TraineePlan.trainer_id == trainee.trainer_id,
-        )
-        .order_by(TraineePlan.id.desc())
-        .limit(1)
-    ).first()
 
 
 def library(session: Session, trainer_id: int) -> list[PlanTemplate]:

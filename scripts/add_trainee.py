@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.plan and not created:
             plan_history.assign(session, trainee, plan, "script")
         if args.no_plan:
-            trainee.training_plan = None
+            plan_history.remove(session, trainee)
         if args.consent_date:
             trainee.consent_date = args.consent_date
         if args.timezone:

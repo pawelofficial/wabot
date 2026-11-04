@@ -95,6 +95,7 @@ def reply(message_id: int) -> None:
     now = utcnow()
     with SessionLocal() as session:
         message = session.get_one(Message, message_id)
+        # With their current plan version: the LLM call and the save below use this same one.
         trainee = session.get_one(Trainee, message.trainee_id)
         history = conversation.recent_history(session, trainee.id, now)
     try:

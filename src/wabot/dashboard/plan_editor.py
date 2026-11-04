@@ -5,6 +5,9 @@ and reorder days and exercises. On "Zapisz" the script sends the whole plan as o
 field, `plan`, shaped like plans.TrainingPlan. parse() tidies it up (trims text, drops empty
 fields), checks it with TrainingPlan (the same rules as a YAML plan) and turns the errors into
 Polish. With errors, the page is shown again with what the trainer typed.
+
+Each day carries its ID (plans.PlanDay.id) through the form, unseen, so a renamed or moved day
+stays the same day; a day added in the editor has none until the plan is saved.
 """
 
 import json
@@ -35,7 +38,7 @@ def exercise_groups() -> list[Group]:
 def form_data(plan: TrainingPlan | None) -> dict:
     """What the editor starts with: the trainee's plan, or one empty day for a new plan."""
     if plan is None:
-        return {"notes": "", "days": [{"name": "", "exercises": [_exercise({})]}]}
+        return {"notes": "", "days": [{"id": "", "name": "", "exercises": [_exercise({})]}]}
     return _clean(plan.model_dump(mode="json"))
 
 
@@ -77,6 +80,7 @@ def _clean(raw: dict) -> dict:
         "notes": _text(raw.get("notes")),
         "days": [
             {
+                "id": _text(day.get("id")),
                 "name": _text(day.get("name")),
                 "exercises": [_exercise(e) for e in _list(day.get("exercises"))],
             }
@@ -92,6 +96,7 @@ def _without_empty(data: dict) -> dict:
         "notes": data["notes"] or None,
         "days": [
             {
+                "id": day["id"] or None,
                 "name": day["name"],
                 "exercises": [
                     {key: value for key, value in e.items() if value != ""}
@@ -124,6 +129,9 @@ def _place(loc: tuple, data: dict) -> str:
 def _message(error: dict) -> str:
     kind, loc, context = error["type"], error["loc"], error.get("ctx") or {}
     field = loc[-1] if loc else None
+    if kind == "duplicate_day_id" or (len(loc) == 3 and loc[0] == "days" and field == "id"):
+        # Only a tampered or very stale form gets here: the IDs come from the server.
+        return "nie udało się rozpoznać dnia, odśwież stronę"
     if kind == "duplicate_day":
         return f"dwa dni mają tę samą nazwę („{context['name']}”)"
     if kind == "duplicate_exercise":

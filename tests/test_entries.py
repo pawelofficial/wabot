@@ -1,16 +1,19 @@
 import datetime as dt
+from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
-from wabot import entries
+from wabot import entries, plan_history, plans
 from wabot.db import SessionLocal
 from wabot.llm_output import Exercise, LlmOutput, Training, Weight
-from wabot.models import Message, TrainingCheckin, TrainingExercise, WeightEntry
+from wabot.models import Message, Trainee, TrainingCheckin, TrainingExercise, WeightEntry
 
 from .test_webhook import PHONE, add_trainee
 
 MONDAY = dt.date(2026, 11, 2)
+PLAN_DIR = Path(__file__).parents[1] / "plans"
 
 
 @pytest.fixture
@@ -198,3 +201,71 @@ def test_nothing_reported_saves_nothing(trainee, report):
 def test_exercise_columns_match_the_llm_output():
     columns = set(TrainingExercise.__table__.columns.keys())
     assert set(Exercise.model_fields) <= columns
+
+
+def test_a_checkin_points_to_the_plan_version_it_was_checked_against(trainee, report):
+    save(trainee, report(), training=training(exercise("Przysiad ze sztangą", "back_squat")))
+    first_version = trainee.plan_version_id
+    # The trainer changes the plan; the next report is checked against the new version.
+    with SessionLocal() as session:
+        current = session.get(Trainee, trainee.id)
+        plan_history.assign(session, current, plans.load(PLAN_DIR / "upper_lower.yaml"), "edited")
+        session.commit()
+    save(current, report(), training=training(exercise("Plank", "plank"), status="skipped"))
+    assert [c.plan_version_id for c in checkins()] == [first_version, current.plan_version_id]
+    assert first_version != current.plan_version_id  # the first one keeps its version
+
+
+def test_without_a_plan_a_checkin_has_no_plan_version(report):
+    no_plan = add_trainee(phone="48999000111", plan=None)
+    run = training(exercise("Bieg", None, in_plan=False))
+    save(no_plan, report(), training=run.model_copy(update={"plan_day": None}))
+    assert [c.plan_version_id for c in checkins()] == [None]
+
+
+def test_the_database_refuses_another_trainees_plan_version(trainee, report):
+    other = add_trainee(phone="48999000111")
+    with SessionLocal() as session:
+        session.get(Trainee, other.id).plan_version_id = trainee.plan_version_id
+        with pytest.raises(IntegrityError):
+            session.commit()
+    with SessionLocal() as session:
+        session.add(
+            TrainingCheckin(
+                trainer_id=other.trainer_id,
+                trainee_id=other.id,
+                date=MONDAY,
+                status="done",
+                missed_exercises=[],
+                plan_version_id=trainee.plan_version_id,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+
+def test_trainings_of_a_renamed_day_have_the_same_day_id(trainee, report):
+    save(trainee, report(), training=training(exercise("Przysiad ze sztangą", "back_squat")))
+    # The trainer renames "Dzień A" (the editor sends the day's ID back with the new name).
+    with SessionLocal() as session:
+        current = session.get(Trainee, trainee.id)
+        renamed = plans.of(current)
+        renamed.days[0].name = "Poniedziałek – nogi"
+        plan_history.assign(session, current, renamed, "edited")
+        session.commit()
+    monday_legs = training(exercise("Przysiad ze sztangą", "back_squat"))
+    save(
+        current,
+        report(),
+        training=monday_legs.model_copy(update={"plan_day": "Poniedziałek – nogi"}),
+    )
+    first, second = checkins()
+    assert (first.plan_day, second.plan_day) == ("Dzień A", "Poniedziałek – nogi")
+    assert first.plan_day_id == second.plan_day_id == plans.of(current).days[0].id
+    assert first.plan_version_id != second.plan_version_id
+
+
+def test_training_outside_the_plan_has_no_day_id(trainee, report):
+    run = training(exercise("Bieg", None, in_plan=False)).model_copy(update={"plan_day": None})
+    save(trainee, report(), training=run)
+    assert [(c.plan_day, c.plan_day_id) for c in checkins()] == [(None, None)]

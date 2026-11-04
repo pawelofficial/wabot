@@ -49,7 +49,7 @@
 {% endmacro %}
 
 {% macro day_card(day) %}
-<section class="card plan-day" data-day>
+<section class="card plan-day" data-day data-day-id="{{ day.id }}">
   <div class="plan-day-head">
     <label class="field grow"><span>Nazwa dnia</span><input data-field="name" value="{{ day.name }}" placeholder="np. Dzień A – nogi" required></label>
     {{ row_actions("dzień") }}
@@ -96,7 +96,7 @@
     <span class="muted small">{% if library %}{% if cancel_url != "/dashboard/plans" %}Podopieczni, którzy już mają ten plan, zachowają swoją kopię.{% endif %}{% else %}Wcześniejszy plan zostaje w historii planów; zapisane treningi bez zmian.{% endif %}</span>
   </div>
 
-  <template data-day-template>{{ day_card({"name": "", "exercises": [empty_exercise]}) }}</template>
+  <template data-day-template>{{ day_card({"id": "", "name": "", "exercises": [empty_exercise]}) }}</template>
   <template data-exercise-template>{{ exercise_row(empty_exercise) }}</template>
   <template data-chip-template>{{ chip("") }}</template>
 </form>

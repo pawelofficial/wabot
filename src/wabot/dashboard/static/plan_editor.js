@@ -80,6 +80,8 @@
     const plan = {
       notes: value(form, "notes"),
       days: [...days.querySelectorAll(":scope > [data-day]")].map((day) => ({
+        // The day's ID, unseen: a renamed or moved day stays the same day ("" for a new one).
+        id: day.dataset.dayId,
         name: value(day.querySelector(".plan-day-head"), "name"),
         exercises: [...day.querySelectorAll("[data-exercise]")].map((row) => ({
           id: value(row, "id"),

@@ -41,24 +41,17 @@ def trainee_page(trainee: Trainee, done: str | None = None) -> RedirectResponse:
 
 def users_of(session, trainer: Trainer) -> dict[int, list[tuple[Trainee, bool]]]:
     """Per library plan: the trainer's trainees whose current plan came from it, and whether it
-    was edited since. Only trainees who are the trainer's now (one moved to another trainer
-    keeps their old versions, which mustn't show them here)."""
-    newest = (
-        select(func.max(TraineePlan.id))
-        .join(Trainee, Trainee.id == TraineePlan.trainee_id)
-        .where(TraineePlan.trainer_id == trainer.id, Trainee.trainer_id == trainer.id)
-        .group_by(TraineePlan.trainee_id)
-    )
-    rows = session.execute(
-        select(TraineePlan, Trainee)
-        .join(Trainee, Trainee.id == TraineePlan.trainee_id)
-        .where(TraineePlan.id.in_(newest), Trainee.training_plan.is_not(None))
+    was edited since."""
+    trainees = session.scalars(
+        select(Trainee)
+        .join(TraineePlan, TraineePlan.id == Trainee.plan_version_id)
+        .where(Trainee.trainer_id == trainer.id, TraineePlan.template_id.is_not(None))
         .order_by(Trainee.name)
     )
     users: dict[int, list] = {}
-    for version, trainee in rows:
-        if version.template_id is not None:
-            users.setdefault(version.template_id, []).append((trainee, version.source == "edited"))
+    for trainee in trainees:
+        version = trainee.plan_version
+        users.setdefault(version.template_id, []).append((trainee, version.source == "edited"))
     return users
 
 
@@ -82,8 +75,6 @@ def name_error(session, trainer: Trainer, name: str, template: PlanTemplate | No
 
 
 def trainee_plan_page(request, session, trainer, trainee, done=None, status=200, **extra):
-    history = plan_history.history(session, trainee)
-    has_plan = trainee.training_plan is not None
     response = render(
         request,
         "plan.html",
@@ -92,8 +83,8 @@ def trainee_plan_page(request, session, trainer, trainee, done=None, status=200,
         trainee,
         "plan",
         plan=plans.of(trainee),
-        current=history[0] if history and has_plan else None,
-        history=history,
+        current=trainee.plan_version,
+        history=plan_history.history(session, trainee),
         library=plan_history.library(session, trainer.id),
         sources=plan_history.SOURCES,
         catalog=exercises.BY_ID,
@@ -152,7 +143,7 @@ def editor_page(
 
 
 def trainee_editor(request, session, trainer, trainee, data, errors=(), status=200):
-    heading = "Edycja planu" if trainee.training_plan else "Nowy plan"
+    heading = "Edycja planu" if trainee.plan_version else "Nowy plan"
     return editor_page(
         request,
         session,
@@ -240,7 +231,6 @@ def plan_version(
     version: VersionDep,
 ):
     """An earlier (or the current) version of the trainee's plan."""
-    current = plan_history.current_version(session, trainee)
     return render(
         request,
         "plan_version.html",
@@ -250,9 +240,7 @@ def plan_version(
         "plan",
         version=version,
         plan=TrainingPlan.model_validate(version.plan),
-        is_current=current is not None
-        and current.id == version.id
-        and trainee.training_plan is not None,
+        is_current=trainee.plan_version_id == version.id,
         sources=plan_history.SOURCES,
         catalog=exercises.BY_ID,
     )
@@ -308,11 +296,13 @@ def save_library_plan(request, session, trainer, template, plan_json, name):
         errors = [error, *errors]
     if errors:
         return library_editor(request, session, trainer, template, data, name, errors, 422)
+    # Days keep their IDs; a day added again under an old name gets that day's ID back.
+    earlier = [TrainingPlan.model_validate(template.plan)] if template is not None else []
     if template is None:
         template = PlanTemplate(trainer_id=trainer.id)
         session.add(template)
     template.name = name
-    template.plan = plans.to_db(new_plan)
+    template.plan = plans.to_db(plans.with_day_ids(new_plan, earlier))
     session.commit()
     return RedirectResponse(f"/dashboard/plans/{template.id}", 303)
 

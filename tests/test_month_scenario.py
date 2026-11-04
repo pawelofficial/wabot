@@ -12,7 +12,7 @@ from collections import Counter
 import pytest
 from sqlalchemy import select
 
-from wabot import main, plan_history, simulation
+from wabot import main, plan_history, plans, simulation
 from wabot.config import Settings
 from wabot.db import SessionLocal
 from wabot.models import (
@@ -63,6 +63,12 @@ def test_simulated_trainers_and_trainees_have_every_field_filled():
                 assert empty == [], f"{model.__name__} {row.id}: {empty} not set by the scenarios"
         # Kasia and Tomek are both Marek's, with different plans: two library plans for him.
         assert len(plan_history.library(session, 1)) == 2
+        # Every stored plan day has its ID, and a trainee's days have their library plan's.
+        for row in [*session.scalars(select(PlanTemplate)), *session.scalars(select(TraineePlan))]:
+            assert all(day.get("id") for day in row.plan["days"]), row
+        for version in session.scalars(select(TraineePlan)):
+            library_plan = session.get(PlanTemplate, version.template_id)
+            assert version.plan == library_plan.plan
 
 
 @pytest.mark.parametrize("daily_updates_only", [False, True])
@@ -108,6 +114,12 @@ def test_a_month_of_reports_from_three_trainees(fake_llm, monkeypatch, daily_upd
                     training["date"],
                 ), where
                 assert checkin.status == saved.get("status", training["status"]), where
+                # Checked against the trainee's plan version (the one from the library), and the
+                # day's ID from it.
+                trainee = registered[scenario.key]
+                assert checkin.plan_version_id == trainee.plan_version_id, where
+                day = plans.of(trainee).day(training["plan_day"]) if training["plan_day"] else None
+                assert checkin.plan_day_id == (day.id if day else None), where
                 assert checkin.missed_exercises == saved.get("missed", []), where
                 assert checkin.saved_exercises == [
                     (e["exercise_id"], e["replaces"]) for e in training["exercises"]
