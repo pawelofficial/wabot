@@ -9,6 +9,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
@@ -158,7 +159,8 @@ class WeightEntry(Base):
 
 class TrainingCheckin(Base):
     """A trainee's training on a day, as reported, with its exercises. A day can have several
-    (see WeightEntry); the newest one is the current session."""
+    (see WeightEntry); the newest one of each kind (of the plan, outside it: outside_plan) is
+    current."""
 
     __tablename__ = "training_checkins"
     __table_args__ = (
@@ -185,6 +187,11 @@ class TrainingCheckin(Base):
     # for training outside the plan.
     plan_day_id: Mapped[str | None] = mapped_column(String(32))
     plan_day: Mapped[str | None] = mapped_column(Text)
+    # Training outside the plan (a run, a swim): no plan day, nothing from the plan and not a
+    # skipped plan day (entries.outside_plan()). A day's current trainings are the newest of
+    # each kind, so "A in the morning, a run in the evening" are two, while "sorki, to był B"
+    # after an A is a correction and replaces it.
+    outside_plan: Mapped[bool] = mapped_column(default=False, server_default=false())
     status: Mapped[str] = mapped_column(String(10))  # done, partial or skipped
     # Catalog IDs of the day's plan exercises the trainee said they didn't do.
     missed_exercises: Mapped[list[str]] = mapped_column(JSON)

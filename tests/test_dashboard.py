@@ -3,16 +3,25 @@
 import datetime as dt
 import json
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
 
-from wabot import assistant, plan_history, plans
+from wabot import assistant, entries, exercises, llm_output, plan_history, plans
 from wabot.config import Settings, get_settings
 from wabot.dashboard import auth, plan_editor, queries, routes
 from wabot.db import SessionLocal
 from wabot.main import app
-from wabot.models import Message, PlanTemplate, Trainee, TraineePlan, Trainer, WeightEntry
+from wabot.models import (
+    Message,
+    PlanTemplate,
+    Trainee,
+    TraineePlan,
+    Trainer,
+    TrainingExercise,
+    WeightEntry,
+)
 
 PLAN_DIR = Path(__file__).parents[1] / "plans"
 SECTIONS = ["weight", "trainings", "plan"]
@@ -280,6 +289,19 @@ def test_trainee_pages_say_to_choose_a_trainee_first(client, settings, people):
 
 def test_polish_formats():
     assert routes.pl_date(dt.date(2026, 10, 5), weekday=True) == "pon 5 paź 2026"
+    assert routes.pl_month(dt.date(2026, 10, 1)) == "październik 2026"
+    assert routes.pl_month(dt.date(2026, 11, 1), in_=True) == "w listopadzie 2026"
+    assert (routes.pl_number(62.5), routes.pl_number(60.0)) == ("62,5", "60")
+
+    def done(sets, reps, kg):
+        return routes.pl_dose(TrainingExercise(sets=sets, reps=reps, weight_kg=kg))
+
+    assert done(4, "8", 62.5) == "4 × 8, 62,5 kg"
+    assert (done(3, None, None), done(None, "28 min", None), done(None, None, 20)) == (
+        "3 serie",
+        "28 min",
+        "20 kg",
+    )
     assert routes.pl_kg(82.4) == "82,4 kg"
     assert routes.pl_kg(81.2 - 82.4, signed=True) == "−1,2 kg"
     assert routes.pl_kg(0.4, signed=True) == "+0,4 kg"
@@ -804,3 +826,168 @@ def test_library_plans_pass_their_day_ids_on(client, settings, people):
             f"/dashboard/trainees/{trainee.id}/plan/assign", data={"template_id": template_id}
         )
         assert day_ids(stored_plan(trainee)) == {"Trening A": library["Trening 1"]}
+
+
+# Treningi
+
+
+def ex(exercise_id, name, in_plan=True, **fields) -> dict:
+    """An exercise as the model returns it."""
+    empty = dict(sets=None, reps=None, weight_kg=None, replaces=None, comment=None)
+    return {"exercise_id": exercise_id, "name": name, "in_plan": in_plan, **empty, **fields}
+
+
+def add_training(trainee, day, text, plan_day=None, exercises=(), status="done", notes=None):
+    """A training report as the bot saves it: the model's answer checked against the trainee's
+    plan (validate_output() works out the missed exercises and partial), then entries.save()."""
+    with SessionLocal() as session:
+        trainee = session.get(Trainee, trainee.id)
+        message = Message(
+            direction="in",
+            phone=trainee.phone,
+            type="text",
+            body=text,
+            trainee_id=trainee.id,
+            trainer_id=trainee.trainer_id,
+        )
+        session.add(message)
+        session.flush()
+        training = {
+            "date": day.isoformat(),
+            "plan_day": plan_day,
+            "status": status,
+            "exercises": list(exercises),
+            "notes": notes,
+        }
+        raw = json.dumps({"reply": "Zapisałem.", "weight": None, "training": training})
+        output = llm_output.validate_output(raw, day, plans.of(trainee))
+        entries.save(session, trainee, message, output)
+
+
+def october(day: int) -> dt.date:
+    return dt.date(2026, 10, day)
+
+
+UPPER_1 = [
+    ex("bench_press", "Wyciskanie sztangi na ławce płaskiej", sets=4, reps="8", weight_kg=62.5),
+    ex("dumbbell_row", "Wiosłowanie hantlem", in_plan=False, replaces="barbell_row"),
+    ex("overhead_press", "Wyciskanie żołnierskie"),
+    ex("lat_pulldown", "Ściąganie drążka"),
+    ex("biceps_curl", "Uginanie ramion"),
+]
+NAME = {i: e.name for i, e in exercises.BY_ID.items()}
+
+
+def test_the_trainings_page_shows_the_month_and_each_days_trainings(client, settings, people):
+    kasia, ola = people["Kasia"], people["Ola"]
+    give_plan(kasia)
+    add_training(kasia, october(5), "yanek góra 1 zrobiona", "Poniedziałek – góra 1", UPPER_1)
+    lower = [ex("back_squat", "Przysiad"), ex("romanian_deadlift", "RDL")]
+    add_training(kasia, october(6), "yanek dół, tylko przysiad i rdl", "Wtorek – dół 1", lower)
+    run = [ex(None, "Bieg 5 km", in_plan=False, reps="28 min")]
+    add_training(kasia, october(6), "yanek pobiegałem 5 km", exercises=run)
+    skipped = dict(status="skipped", notes="ból barku")
+    add_training(kasia, october(8), "yanek dziś bez", "Czwartek – góra 2", **skipped)
+    add_training(kasia, october(9), "yanek martwy", "Piątek – dół 2", [ex("deadlift", "Martwy")])
+    friday = ["deadlift", "bulgarian_split_squat", "leg_extension", "hip_thrust", "plank"]
+    everything = [ex(i, NAME[i]) for i in friday]
+    add_training(kasia, october(9), "yanek sorki, wszystko z dołu 2", "Piątek – dół 2", everything)
+    add_training(ola, october(6), "yanek ola biegała", exercises=run)
+
+    sign_in(client, people["Trener Marek"])
+    response = client.get(f"/dashboard/trainees/{kasia.id}/trainings?month=2026-10")
+    assert response.status_code == 200
+    page = response.text
+    assert "październik 2026" in page
+    days = response.context["days"]
+    assert [d.date.day for d in days] == [9, 8, 6, 5]  # newest first
+    marks = {d.date.day: [(w.label, w.kind, w.mark) for w in d.workouts] for d in days}
+    assert marks == {
+        5: [("A", "done", "✓")],  # the replacement counts as done
+        6: [("B", "partial", "2/4"), (None, "outside", "+")],  # a run besides day B
+        8: [("C", "skipped", "✕")],
+        9: [("D", "done", "✓")],  # the correction counts
+    }
+    assert [w.reports for w in days[0].workouts] == [2]
+    assert response.context["counts"] == {"done": 2, "partial": 1, "skipped": 1, "outside": 1}
+    week = next(w for w in response.context["weeks"] if w.days[0].date == october(5))
+    assert week.from_plan == 3
+
+    # The cell says it in words too, and links to the day's details.
+    assert (
+        'aria-label="wt 6 paź 2026: B · Wtorek – dół 1: częściowo, 2 z 4 ćwiczeń; '
+        'Poza planem: Bieg 5 km"' in page
+    )
+    assert 'href="#d-2026-10-06"' in page and 'id="d-2026-10-06"' in page
+    assert f"Niezrobione: {NAME['leg_curl']}, {NAME['calf_raise']}" in page
+    assert f"zamiast: {NAME['barbell_row']}" in page and "62,5 kg" in page
+    assert "„yanek pobiegałem 5 km”" in page and "ból barku" in page
+    assert page.count(">poprawiony<") == 1
+    assert "2 pełne, 1 częściowy" in page
+    assert "„yanek martwy”" not in page  # the corrected report
+    assert "ola biegała" not in page  # another trainee's
+    assert "<strong>A</strong> Poniedziałek – góra 1" in page  # the legend: the current plan
+
+
+def test_a_days_letter_follows_the_current_plan(client, settings, people):
+    kasia = people["Kasia"]
+    give_plan(kasia)
+    add_training(kasia, october(5), "yanek góra 1", "Poniedziałek – góra 1", UPPER_1)
+    lower = [ex("back_squat", "Przysiad")]
+    add_training(kasia, october(6), "yanek dół 1", "Wtorek – dół 1", lower)
+    # The trainer renames the Monday, puts a new day first and drops the Tuesday.
+    with SessionLocal() as session:
+        trainee = session.get(Trainee, kasia.id)
+        plan = plans.of(trainee)
+        plan.days[0].name = "Poniedziałek – push"
+        cardio = plans.PlanDay(name="Niedziela – cardio", exercises=[{"id": "plank"}])
+        plan.days = [cardio, plan.days[0], *plan.days[2:]]
+        plan_history.assign(session, trainee, plan, "edited")
+        session.commit()
+
+    sign_in(client, people["Trener Marek"])
+    response = client.get(f"/dashboard/trainees/{kasia.id}/trainings?month=2026-10")
+    monday, tuesday = (d.workouts[0] for d in reversed(response.context["days"]))
+    # Monday's day is still in the plan (by its ID): the letter it has there, and its new name.
+    assert (monday.label, monday.current_name) == ("B", "Poniedziałek – push")
+    assert "W obecnym planie: Poniedziałek – push" in response.text
+    # Tuesday's day isn't: the letter it had in the plan it was saved against.
+    assert (tuesday.label, tuesday.current_name) == ("B", None)
+    assert "<strong>A</strong> Niedziela – cardio" in response.text
+
+
+def test_the_trainings_page_moves_between_months(client, settings, people):
+    kasia = people["Kasia"]
+    give_plan(kasia)
+    lower = [ex("back_squat", "Przysiad")]
+    add_training(kasia, dt.date(2026, 9, 29), "yanek dół 1", "Wtorek – dół 1", lower)
+    add_training(kasia, october(5), "yanek góra 1", "Poniedziałek – góra 1", UPPER_1)
+    sign_in(client, people["Trener Marek"])
+    url = f"/dashboard/trainees/{kasia.id}/trainings"
+
+    response = client.get(f"{url}?month=2026-10")
+    # October's first week starts in September: the day is shown, links to September's page
+    # and counts for the week, but it isn't one of October's trainings.
+    first_week = response.context["weeks"][0]
+    assert first_week.days[0].date == dt.date(2026, 9, 28) and first_week.from_plan == 1
+    assert 'href="?month=2026-09#d-2026-09-29"' in response.text
+    assert [d.date for d in response.context["days"]] == [october(5)]
+    assert 'href="?month=2026-09"' in response.text
+
+    # Without a month (or with something that isn't one): this month, in the trainee's time.
+    this_month = dt.datetime.now(ZoneInfo(kasia.timezone)).date().replace(day=1)
+    for query in ("", "?month=abc", "?month=2026-13"):
+        assert client.get(url + query).context["month"] == this_month, query
+    if this_month > october(1):
+        page = client.get(url).text
+        assert "nie ma zgłoszonych treningów" in page
+        assert 'href="?month=2026-10#d-2026-10-05"' in page  # the last training
+        assert response.context["next"] == "2026-11"
+    # No month after this one.
+    assert client.get(url).context["next"] is None
+
+
+def test_the_trainings_page_without_trainings(client, settings, people):
+    sign_in(client, people["Trener Marek"])
+    page = client.get(f"/dashboard/trainees/{people['Kasia'].id}/trainings").text
+    assert "Brak zgłoszonych treningów" in page and "calendar" not in page

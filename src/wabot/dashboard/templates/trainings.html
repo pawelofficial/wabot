@@ -1,6 +1,142 @@
 {% extends "base.html" %}
 {% block title %}Treningi – {{ trainee.name }}{% endblock %}
 {% block heading %}Treningi – {{ trainee.name }}{% endblock %}
+
+{# The calendar's mark of one training: its plan day's letter over ✓ / 4/5 / ✕, or + outside the plan. #}
+{% macro mark(w) -%}
+<span class="mark {{ w.kind }}" aria-hidden="true">
+  {%- if w.kind == "outside" %}<span class="mark-label">+</span>
+  {%- else %}<span class="mark-label">{{ w.label or "?" }}</span><span class="mark-symbol">{{ w.mark }}</span>{% endif -%}
+</span>
+{%- endmacro %}
+
+{% macro ago(days) -%}
+{%- if days == 0 %}dziś{% elif days == 1 %}wczoraj{% else %}{{ days|pl_count("dzień", "dni", "dni") }} temu{% endif -%}
+{%- endmacro %}
+
 {% block content %}
-<p class="empty">Tu będzie kalendarz treningów.</p>
+{% if not last %}
+<p class="empty">Brak zgłoszonych treningów. Pojawią się tu, gdy {{ trainee.name }} napisze np. „yanek trening A zrobiony”.</p>
+{% else %}
+
+<div class="tiles">
+  <div class="tile">
+    <div class="tile-label">Ostatni trening</div>
+    <div class="tile-value">{{ ago((today - last).days) }}</div>
+    <div class="tile-note">{{ last|pl_date(true) }}</div>
+  </div>
+  <div class="tile">
+    <div class="tile-label">Z planu {{ month|pl_month(true) }}</div>
+    <div class="tile-value">{{ counts.done + counts.partial }}</div>
+    <div class="tile-note">{{ counts.done|pl_count("pełny", "pełne", "pełnych") }}, {{ counts.partial|pl_count("częściowy", "częściowe", "częściowych") }}</div>
+  </div>
+  <div class="tile">
+    <div class="tile-label">Pominięte</div>
+    <div class="tile-value">{{ counts.skipped }}</div>
+    <div class="tile-note">zgłoszone jako pominięte</div>
+  </div>
+  <div class="tile">
+    <div class="tile-label">Poza planem</div>
+    <div class="tile-value">{{ counts.outside }}</div>
+    <div class="tile-note">np. bieganie</div>
+  </div>
+</div>
+
+<section class="card">
+  <div class="month-bar">
+    <a class="button" href="?month={{ previous }}" aria-label="Poprzedni miesiąc">‹</a>
+    <h2 class="card-title month-name">{{ month|pl_month }}</h2>
+    {% if next %}<a class="button" href="?month={{ next }}" aria-label="Następny miesiąc">›</a>{% else %}<span class="button disabled" aria-hidden="true">›</span>{% endif %}
+  </div>
+  <div class="table-scroll">
+    <table class="calendar">
+      <thead>
+        <tr>{% for name in ["pon", "wt", "śr", "czw", "pt", "sob", "niedz"] %}<th scope="col">{{ name }}</th>{% endfor %}<th scope="col" class="week-count" title="Treningi z planu w tygodniu">tydz.</th></tr>
+      </thead>
+      <tbody>
+        {% for week in weeks %}
+        <tr>
+          {% for d in week.days %}
+          <td class="{{ 'other-month' if not d.in_month }}{{ ' today' if d.date == today }}{{ ' future' if d.date > today }}">
+            {% if d.workouts %}
+            <a class="cal-day" href="{{ '' if d.in_month else '?month=' ~ month_param(d.date) }}#{{ d.anchor }}" title="{{ d.summary }}" aria-label="{{ d.date|pl_date(true) }}: {{ d.summary }}">
+              <span class="cal-date">{{ d.date.day }}</span>
+              {% for w in d.workouts %}{{ mark(w) }}{% endfor %}
+            </a>
+            {% else %}
+            <div class="cal-day"><span class="cal-date">{{ d.date.day }}</span></div>
+            {% endif %}
+          </td>
+          {% endfor %}
+          <td class="week-count" title="{{ week.from_plan|pl_count('trening', 'treningi', 'treningów') }} z planu w tym tygodniu">{{ week.from_plan }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <ul class="legend">
+    <li><span class="mark done" aria-hidden="true"><span class="mark-symbol">✓</span></span> zrobiony</li>
+    <li><span class="mark partial" aria-hidden="true"><span class="mark-symbol">4/5</span></span> częściowo (zrobione / w planie)</li>
+    <li><span class="mark skipped" aria-hidden="true"><span class="mark-symbol">✕</span></span> pominięty</li>
+    <li><span class="mark outside" aria-hidden="true"><span class="mark-label">+</span></span> poza planem</li>
+    <li><span class="mark-blank" aria-hidden="true"></span> brak zgłoszenia</li>
+  </ul>
+  {% if legend %}
+  <ul class="legend days-legend">
+    {% for label, name in legend %}<li><strong>{{ label }}</strong> {{ name }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2 class="card-title">Treningi {{ month|pl_month(true) }}</h2>
+  {% if days %}
+  <p class="card-subtitle">Najnowsze na górze. Liczy się ostatnie zgłoszenie z danego dnia; trening poza planem (np. bieganie) jest osobno.</p>
+  {% for d in days %}
+  <article class="training-day" id="{{ d.anchor }}">
+    <h3 class="training-date">{{ d.date|pl_date(true) }}</h3>
+    {% for w in d.workouts %}
+    {% set c = w.checkin %}
+    <div class="workout">
+      <div class="workout-head">
+        {{ mark(w) }}
+        <span class="workout-name">{{ w.title }}</span>
+        <span class="status-text {{ w.kind }}">{{ w.status_text }}</span>
+        {% if w.reports > 1 %}<span class="badge" title="Ten trening był zgłoszony {{ w.reports }} razy; liczy się ostatnie zgłoszenie">poprawiony</span>{% endif %}
+      </div>
+      {% if w.current_name %}<p class="muted small">W obecnym planie: {{ w.current_name }}</p>{% endif %}
+      {% if c.missed_exercises %}
+      <p class="small">Niezrobione: {{ w.missed_names|join(", ") }}</p>
+      {% endif %}
+      {% if c.exercises %}
+      <div class="table-scroll">
+        <table class="table workout-table">
+          <thead><tr><th>Ćwiczenie</th><th>Wykonanie</th></tr></thead>
+          <tbody>
+            {% for e in c.exercises %}
+            <tr>
+              <td>{{ e.name }}
+                {%- if not e.in_plan and not e.replaces and not c.outside_plan %} <span class="badge">spoza planu</span>{% endif %}
+                {%- if e.replaces %}<div class="muted small">zamiast: {{ catalog[e.replaces].name }}</div>{% endif %}
+                {%- if e.comment %}<div class="muted small">{{ e.comment }}</div>{% endif %}</td>
+              <td class="dose">{{ e|pl_dose }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+      {% if c.notes %}<p class="small"><span class="muted">Uwagi:</span> {{ c.notes }}</p>{% endif %}
+      {% if w.message %}<p class="workout-message small">„{{ w.message.body }}” <span class="muted nowrap">· {{ w.message.created_at|pl_datetime(default_timezone) }}</span></p>{% endif %}
+    </div>
+    {% endfor %}
+  </article>
+  {% endfor %}
+  {% else %}
+  <p class="empty">{{ (month|pl_month(true))|capitalize }} nie ma zgłoszonych treningów.
+    {% if last < month %}Ostatni trening: <a href="?month={{ month_param(last) }}#d-{{ last.isoformat() }}">{{ last|pl_date(true) }}</a>.{% endif %}
+  </p>
+  {% endif %}
+</section>
+{% endif %}
 {% endblock %}

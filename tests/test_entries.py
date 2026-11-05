@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from wabot import entries, plan_history, plans
+from wabot.dashboard import queries
 from wabot.db import SessionLocal
 from wabot.llm_output import Exercise, LlmOutput, Training, Weight
 from wabot.models import Message, Trainee, TrainingCheckin, TrainingExercise, WeightEntry
@@ -269,3 +270,80 @@ def test_training_outside_the_plan_has_no_day_id(trainee, report):
     run = training(exercise("Bieg", None, in_plan=False)).model_copy(update={"plan_day": None})
     save(trainee, report(), training=run)
     assert [(c.plan_day, c.plan_day_id) for c in checkins()] == [(None, None)]
+
+
+# A day's two kinds of training (entries.outside_plan()): the plan's and one outside the plan.
+
+TWO_DAYS = {
+    "days": [
+        {"name": "Dzień A", "exercises": [{"id": "back_squat"}, {"id": "plank"}]},
+        {"name": "Dzień B", "exercises": [{"id": "bench_press", "replacements": ["push_up"]}]},
+    ]
+}
+
+
+def run() -> Training:
+    return training(exercise("Bieg 5 km", None, in_plan=False)).model_copy(
+        update={"plan_day": None}
+    )
+
+
+def on_day(day: str, *exercises: Exercise, status="done") -> Training:
+    return training(*exercises, status=status).model_copy(update={"plan_day": day})
+
+
+@pytest.mark.parametrize(
+    "report, outside",
+    [
+        (run(), True),
+        (on_day("Dzień A", exercise("Plank", "plank")), False),
+        (on_day("Dzień A", status="skipped"), False),
+        # The model wasn't sure which day it was and asked: still the plan's training.
+        (on_day(None, exercise("Plank", "plank")), False),
+        (on_day(None, exercise("Pompki", "push_up", in_plan=False, replaces="bench_press")), False),
+        # Without a plan everything but a skipped day is outside it.
+        (on_day(None, exercise("Przysiad", "back_squat", in_plan=False)), True),
+        (on_day(None, status="skipped"), False),
+    ],
+)
+def test_what_counts_as_outside_the_plan(report, outside):
+    assert entries.outside_plan(report) is outside
+
+
+@pytest.mark.parametrize("daily", [False, True])
+def test_a_run_on_a_plan_day_is_a_second_training(report, daily):
+    trainee = add_trainee(phone="48999000222", plan=TWO_DAYS)
+    save(trainee, report(), training=on_day("Dzień A", exercise("Plank", "plank")), daily=daily)
+    save(trainee, report(), training=run(), daily=daily)
+    # Correcting the run changes only the run.
+    corrected = run().model_copy(update={"notes": "jednak 6 km"})
+    save(trainee, report(), training=corrected, daily=daily)
+
+    rows = checkins()
+    assert len(rows) == (2 if daily else 3)
+    with SessionLocal() as session:
+        current = queries.workouts(session, session.get(Trainee, trainee.id), MONDAY, MONDAY)
+    assert [(w.kind, w.checkin.plan_day, w.checkin.notes) for w in current] == [
+        ("done", "Dzień A", None),
+        ("outside", None, "jednak 6 km"),
+    ]
+    assert [w.reports for w in current] == [1, 1 if daily else 2]
+
+
+@pytest.mark.parametrize("daily", [False, True])
+def test_another_plan_day_on_the_same_date_corrects_the_day(report, daily):
+    """ "sorki, to był B, nie A", and the answer to "który to był dzień?" after plan exercises
+    without a day: both replace the day's earlier training of the plan."""
+    trainee = add_trainee(phone="48999000222", plan=TWO_DAYS)
+    unsure = on_day(None, exercise("Plank", "plank"))
+    save(trainee, report(), training=unsure, daily=daily)
+    save(trainee, report(), training=on_day("Dzień A", exercise("Plank", "plank")), daily=daily)
+    relabelled = on_day("Dzień B", exercise("Wyciskanie", "bench_press"))
+    save(trainee, report(), training=relabelled, daily=daily)
+
+    assert len(checkins()) == (1 if daily else 3)
+    with SessionLocal() as session:
+        current = queries.workouts(session, session.get(Trainee, trainee.id), MONDAY, MONDAY)
+    assert [(w.checkin.plan_day, w.label, w.reports) for w in current] == [
+        ("Dzień B", "B", 1 if daily else 3)
+    ]

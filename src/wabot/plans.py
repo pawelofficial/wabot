@@ -109,6 +109,11 @@ class TrainingPlan(_Strict):
     def day(self, name: str) -> PlanDay | None:
         return next((d for d in self.days if _key(d.name) == _key(name)), None)
 
+    def day_labels(self) -> dict[str, str]:
+        """The short label of each day by its ID, for the calendar's cells: A, B, C, ... in the
+        plan's order. (A label the trainer sets comes with the calendar's other plan fields.)"""
+        return {d.id: _label(i) for i, d in enumerate(self.days) if d.id is not None}
+
     def without_day_ids(self) -> "TrainingPlan":
         """The same plan with no day IDs: for comparing what the plan says, e.g. with a YAML
         file."""
@@ -146,6 +151,10 @@ class TrainingPlan(_Strict):
 
 def _key(name: str) -> str:
     return " ".join(name.casefold().split())
+
+
+def _label(position: int) -> str:
+    return chr(ord("A") + position) if position < 26 else str(position + 1)
 
 
 def load(path: Path) -> TrainingPlan:

@@ -224,3 +224,50 @@ def test_migration_0008_gives_plan_days_ids_that_follow_the_day(migrated_url):
         plans_left.append(json.loads(db.execute(text("SELECT plan FROM plan_templates")).scalar()))
     engine.dispose()
     assert plans_left == [copied, edited, library_plan]
+
+
+def test_migration_0009_tells_training_outside_the_plan_from_the_plans(migrated_url):
+    url, alembic = migrated_url
+    command.upgrade(alembic, "0008")
+    engine = make_engine(url)
+    # (plan day, status, exercises as (in_plan, replaces)) → outside the plan
+    rows = {
+        1: ("Dzień A", "done", [(True, None)], False),
+        2: (None, "done", [(False, None)], True),  # a run
+        3: (None, "skipped", [], False),
+        4: (None, "done", [(False, None), (True, None)], False),  # the day wasn't known
+        5: (None, "done", [(False, "back_squat")], False),  # a replacement, the same
+    }
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO trainers (id, name, created_at) VALUES (1, 'T', :t)"), T0)
+        db.execute(
+            text(
+                "INSERT INTO trainees (id, trainer_id, phone, name, timezone, consent_date,"
+                " created_at) VALUES (1, 1, '48000000001', 'X', 'Europe/Warsaw', '2026-10-01', :t)"
+            ),
+            T0,
+        )
+        for checkin_id, (plan_day, status, exercises_, _) in rows.items():
+            db.execute(
+                text(
+                    "INSERT INTO training_checkins (id, trainer_id, trainee_id, date, status,"
+                    " missed_exercises, plan_day, created_at, updated_at)"
+                    " VALUES (:id, 1, 1, '2026-10-02', :s, '[]', :d, :t, :t)"
+                ),
+                {"id": checkin_id, "s": status, "d": plan_day, **T0},
+            )
+            for in_plan, replaces in exercises_:
+                db.execute(
+                    text(
+                        "INSERT INTO training_exercises (checkin_id, name, in_plan, replaces)"
+                        " VALUES (:c, 'x', :p, :r)"
+                    ),
+                    {"c": checkin_id, "p": in_plan, "r": replaces},
+                )
+    command.upgrade(alembic, "0009")
+    with engine.connect() as db:
+        outside = dict(db.execute(text("SELECT id, outside_plan FROM training_checkins")).all())
+        exercises_left = db.execute(text("SELECT count(*) FROM training_exercises")).scalar()
+    engine.dispose()
+    assert outside == {i: row[3] for i, row in rows.items()}
+    assert exercises_left == 5  # the check-ins' exercises are still there

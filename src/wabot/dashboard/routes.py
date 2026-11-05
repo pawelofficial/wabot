@@ -22,6 +22,15 @@ HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=HERE / "templates")
 
 MONTHS = "sty lut mar kwi maj cze lip sie wrz paź lis gru".split()
+MONTH_NAMES = (
+    "styczeń luty marzec kwiecień maj czerwiec lipiec sierpień wrzesień październik listopad "
+    "grudzień"
+).split()
+# "w październiku"
+MONTHS_IN = (
+    "styczniu lutym marcu kwietniu maju czerwcu lipcu sierpniu wrześniu październiku listopadzie "
+    "grudniu"
+).split()
 WEEKDAYS = "pon wt śr czw pt sob niedz".split()
 
 
@@ -29,6 +38,13 @@ def pl_date(day: dt.date, weekday: bool = False) -> str:
     """5 paź 2026, or with weekday=True: pon 5 paź 2026."""
     text = f"{day.day} {MONTHS[day.month - 1]} {day.year}"
     return f"{WEEKDAYS[day.weekday()]} {text}" if weekday else text
+
+
+def pl_month(month: dt.date, in_: bool = False) -> str:
+    """październik 2026, or with in_=True: w październiku 2026."""
+    if in_:
+        return f"w {MONTHS_IN[month.month - 1]} {month.year}"
+    return f"{MONTH_NAMES[month.month - 1]} {month.year}"
 
 
 def pl_datetime(moment: dt.datetime, timezone: str) -> str:
@@ -48,6 +64,24 @@ def pl_count(n: int, one: str, few: str, many: str) -> str:
     return f"{n} {word}"
 
 
+def pl_number(x: float) -> str:
+    """62,5 and 60 (no ",0")."""
+    return f"{x:g}".replace(".", ",")
+
+
+def pl_dose(exercise) -> str:
+    """What was done of a reported exercise (models.TrainingExercise): 4 × 8, 62,5 kg; 3 serie;
+    28 min."""
+    sets, reps, kg = exercise.sets, exercise.reps, exercise.weight_kg
+    if sets and reps:
+        done = f"{sets} × {reps}"
+    elif sets:
+        done = pl_count(sets, "seria", "serie", "serii")
+    else:
+        done = reps
+    return ", ".join(part for part in (done, kg and f"{pl_number(kg)} kg") if part)
+
+
 def pl_kg(kg: float, signed: bool = False) -> str:
     """82,4 kg; signed=True: +0,4 kg / −1,2 kg (a real minus sign)."""
     text = f"{abs(kg) if signed else kg:.1f}".replace(".", ",") + " kg"
@@ -58,6 +92,9 @@ def pl_kg(kg: float, signed: bool = False) -> str:
 
 templates.env.filters["pl_date"] = pl_date
 templates.env.filters["pl_kg"] = pl_kg
+templates.env.filters["pl_month"] = pl_month
+templates.env.filters["pl_number"] = pl_number
+templates.env.filters["pl_dose"] = pl_dose
 templates.env.filters["pl_datetime"] = pl_datetime
 templates.env.filters["pl_count"] = pl_count
 # Trainers have no timezone of their own yet; their times are shown in this one.
@@ -73,10 +110,11 @@ TRAINEE_SECTIONS = [
 
 
 def install(app: FastAPI) -> None:
-    from wabot.dashboard import plan_pages  # it uses render() from here
+    from wabot.dashboard import plan_pages, training_pages  # they use render() from here
 
     app.include_router(router)
     app.include_router(plan_pages.router)
+    app.include_router(training_pages.router)
     app.mount("/dashboard/static", StaticFiles(directory=HERE / "static"), name="static")
     # A page that needs a signed-in trainer, without one: go to the login page.
     app.add_exception_handler(
@@ -135,11 +173,6 @@ def weight(request: Request, session: SessionDep, trainer: TrainerDep, trainee: 
         weigh_ins=weigh_ins,
         chart_data=[w.as_json() for w in weigh_ins],
     )
-
-
-@router.get("/trainees/{trainee_id}/trainings")
-def trainings(request: Request, session: SessionDep, trainer: TrainerDep, trainee: TraineeDep):
-    return render(request, "trainings.html", session, trainer, trainee, "trainings")
 
 
 def login_page_response(

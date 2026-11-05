@@ -7,6 +7,7 @@ After every message it checks what was saved against the scenario. scripts/simul
 sends the same messages to the real model.
 """
 
+import datetime as dt
 from collections import Counter
 
 import pytest
@@ -14,6 +15,7 @@ from sqlalchemy import select
 
 from wabot import main, plan_history, plans, simulation
 from wabot.config import Settings
+from wabot.dashboard import queries
 from wabot.db import SessionLocal
 from wabot.models import (
     PlanTemplate,
@@ -130,11 +132,23 @@ def test_a_month_of_reports_from_three_trainees(fake_llm, monkeypatch, daily_upd
             for entry in [*weights, *checkins]:
                 assert entry.updated_at == at, where
 
-    # A correction is an extra row, unless DAILY_UPDATES_ONLY: then one row per day.
+    # A correction is an extra row, unless DAILY_UPDATES_ONLY: then one row per day (for
+    # trainings, one of each kind).
     with SessionLocal() as session:
-        for model in (WeightEntry, TrainingCheckin):
-            rows = Counter(session.execute(select(model.trainee_id, model.date)).all())
+        for model, kind in (
+            (WeightEntry, ()),
+            (TrainingCheckin, (TrainingCheckin.outside_plan,)),
+        ):
+            rows = Counter(session.execute(select(model.trainee_id, model.date, *kind)).all())
             if daily_updates_only:
                 assert set(rows.values()) == {1}, model.__name__
             else:
                 assert max(rows.values()) == 2, model.__name__
+        # Kasia's morning run and evening day B are both that day's trainings.
+        kasia = session.get(Trainee, registered["kasia"].id)
+        day = dt.date(2026, 10, 21)
+        both = queries.workouts(session, kasia, day, day)
+        assert [(w.kind, w.label, w.checkin.plan_day) for w in both] == [
+            ("done", "B", "Dzień B – środa (góra ciała)"),
+            ("outside", None, None),
+        ]

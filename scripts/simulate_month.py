@@ -105,13 +105,18 @@ def main(argv: list[str] | None = None) -> None:
                 if c.notes:
                     print(f"       notes: {c.notes}")
 
-    def current_by_day(model, trainee_id: int) -> dict:
-        """The newest row per day: the current value, what the dashboard will read."""
+    def current_by_day(model, trainee_id: int, kind: str | None = None) -> dict:
+        """The newest row per day (and per value of the `kind` column): the current values,
+        what the dashboard reads. Trainings: the plan's and one outside the plan."""
         with SessionLocal() as session:
             rows = session.scalars(
                 select(model).where(model.trainee_id == trainee_id).order_by(model.id)
             )
-            return {row.date: row for row in rows}
+            newest = {(row.date, getattr(row, kind) if kind else None): row for row in rows}
+        by_day: dict = {}
+        for (day, _), row in sorted(newest.items(), key=lambda item: item[0]):
+            by_day.setdefault(day, []).append(row)
+        return by_day
 
     scenarios = simulation.load_all()
     if args.only:
@@ -157,11 +162,11 @@ def main(argv: list[str] | None = None) -> None:
 
     for s in scenarios:
         weights = current_by_day(WeightEntry, registered[s.key].id)
-        days = current_by_day(TrainingCheckin, registered[s.key].id)
+        days = current_by_day(TrainingCheckin, registered[s.key].id, "outside_plan")
         print(f"{s.name} – current values per day:")
         for day in sorted(weights.keys() | days.keys()):
-            parts = [f"{weights[day].kg} kg"] if day in weights else []
-            if c := days.get(day):
+            parts = [f"{weights[day][0].kg} kg"] if day in weights else []
+            for c in days.get(day, []):
                 missed = f", missed {len(c.missed_exercises)}" if c.missed_exercises else ""
                 label = (c.plan_day or "outside the plan").split(" (")[0]
                 parts.append(f"{label}: {c.status}{missed}")

@@ -109,8 +109,9 @@ reports:
       exercises: [deadlift, pull_up]
     saved: {status: partial, missed: [push_up, bulgarian_split_squat, farmers_walk]}
 
-  - at: "2026-10-20 18:00"
+  - at: "2026-10-21 07:30"
     text: yanek pobiegałam 5 km w 28 minut
+    # Outside the plan, on the day of the evening's day B: two trainings that day, both kept.
     training:
       exercises: [{name: Bieg 5 km, reps: 28 min}]
 

@@ -294,7 +294,7 @@ These aren't bugs, but several later features depend on them.
 1. **A "handled" state on inbound messages (1.2).** Retries, reminders and corrections build on it. Recommended before milestone 4.
 2. ~~**One place for the current plan (2.1)**~~ – done: `trainees.plan_version_id` points to the current version.
 3. ~~**Stable day IDs (2.2)**~~ – done: `PlanDay.id`, kept through renames and library copies; check-ins store it (`plan_day_id`).
-4. **Two sessions on one day** (already open in PLAN.md). This blocks the calendar and affects "the newest row of the day wins" everywhere.
+4. ~~**Two sessions on one day**~~ – decided 2026-11-04: the newest report of each kind (the plan's, outside the plan: `training_checkins.outside_plan`) is current.
 5. ~~**Moving trainees between trainers (2.3)**~~ – decided: never.
 6. **Trainers' own exercises vs the fixed catalog type (2.7).**
 7. **Trainees who aren't Polish (1.3):** the replies stay Polish, but names and messages in other scripts should work.
