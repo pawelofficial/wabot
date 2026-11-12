@@ -1,4 +1,5 @@
-"""Meta WhatsApp Cloud API: webhook parsing, signature checks and sending."""
+"""Meta WhatsApp Cloud API: webhook parsing, signature checks and sending (the counterpart of
+telegram.py; the bot uses one or the other by CHANNEL)."""
 
 import hashlib
 import hmac
@@ -18,8 +19,9 @@ class InboundMessage:
 
 
 def verify_signature(app_secret: str, body: bytes, header: str | None) -> bool:
-    """Check the X-Hub-Signature-256 header Meta sends with every webhook."""
-    if not header or not header.startswith("sha256="):
+    """Check the X-Hub-Signature-256 header Meta sends with every webhook. Without an app
+    secret nothing passes (anyone could sign with an empty key)."""
+    if not app_secret or not header or not header.startswith("sha256="):
         return False
     expected = hmac.new(app_secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, header.removeprefix("sha256="))

@@ -132,7 +132,7 @@ def test_wrong_structure_is_rejected(data, error):
         (output(reply='{"reply": "x"}'), "not JSON"),
         (output(reply="Super. Եթե chcesz, rozpiszę środę."), "non-Polish letters 'Եեթ'"),
         (output(reply="Записал 82 kg."), "non-Polish letters"),
-        (output(reply="x" * 4097), "WhatsApp allows 4096"),
+        (output(reply="x" * 4097), "a chat message allows 4096"),
         (output(weight={"kg": 8.24, "date": "2026-11-03"}), "outside 30–300 kg"),
         (output(weight={"kg": 82, "date": "2026-11-04"}), "in the future"),
         (output(weight={"kg": 82, "date": "2026-09-01"}), "more than 31 days ago"),

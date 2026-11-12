@@ -19,10 +19,16 @@ EXAMPLE_PLAN = Path("plans/example.yaml")
 
 
 def add_message(
-    phone: str, direction: str, body: str, age: timedelta, trainee: Trainee | None = None
+    phone: str,
+    direction: str,
+    body: str,
+    age: timedelta,
+    trainee: Trainee | None = None,
+    channel: str = "whatsapp",
 ) -> Message:
     with SessionLocal() as session:
         msg = Message(
+            channel=channel,
             direction=direction,
             phone=phone,
             type="text",
@@ -68,6 +74,8 @@ def test_service_window_needs_a_recent_inbound_message():
     phone = "48111222333"
     add_message(phone, "in", "hej", age=timedelta(hours=30))
     add_message(phone, "out", "Cześć!", age=timedelta(hours=1))
+    add_message(phone, "in", "z Telegrama", age=timedelta(hours=1), channel="telegram")
+    # WhatsApp's window: a message on Telegram doesn't open it.
     assert not conversation.in_service_window(SessionLocal(), phone, utcnow())
 
     add_message(phone, "in", "82 kg", age=timedelta(hours=2))
@@ -77,10 +85,36 @@ def test_service_window_needs_a_recent_inbound_message():
 def test_send_and_store_saves_the_message(monkeypatch):
     trainee = add_trainee()
     monkeypatch.setattr(conversation.whatsapp, "send_text", lambda *args: "wamid.out1")
-    wamid = conversation.send_and_store(Settings(), trainee, "Hej!")
-    assert wamid == "wamid.out1"
+    external_id = conversation.send_and_store(Settings(channel="whatsapp"), trainee, "Hej!")
+    assert external_id == "wamid.out1"
     history = conversation.recent_history(SessionLocal(), trainee.id, utcnow())
-    assert [(m.direction, m.wamid, m.body) for m in history] == [("out", "wamid.out1", "Hej!")]
+    assert [(m.channel, m.direction, m.external_id, m.body) for m in history] == [
+        ("whatsapp", "out", "wamid.out1", "Hej!")
+    ]
+
+
+def test_send_and_store_on_telegram_needs_the_trainees_chat(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        conversation.telegram,
+        "send_text",
+        lambda settings, chat_id, text, **options: (
+            sent.append((chat_id, text)) or f"tg:{chat_id}:5"
+        ),
+    )
+    trainee = add_trainee()
+    with pytest.raises(conversation.NotOnTelegramError, match="hasn't shared their number"):
+        conversation.send_and_store(Settings(), trainee, "Hej!")  # CHANNEL=telegram by default
+    with SessionLocal() as session:
+        session.get(Trainee, trainee.id).telegram_chat_id = 4242
+        session.commit()
+        trainee = session.get(Trainee, trainee.id)
+    # A reply goes where the message it answers came from, whatever CHANNEL says.
+    settings = Settings(channel="whatsapp")
+    assert conversation.send_and_store(settings, trainee, "Hej!", "telegram") == "tg:4242:5"
+    assert sent == [(4242, "Hej!")]
+    [stored] = conversation.recent_history(SessionLocal(), trainee.id, utcnow())
+    assert (stored.channel, stored.external_id, stored.phone) == ("telegram", "tg:4242:5", PHONE)
 
 
 def test_history_is_the_trainees_own(monkeypatch):

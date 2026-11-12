@@ -8,10 +8,11 @@ A walk through what happens at runtime: which function calls which, in what orde
 
 | File | Role |
 |---|---|
-| `src/wabot/main.py` | FastAPI app: the HTTP endpoints Meta calls, `reply()` (the background job that answers a trainee), `reply_unregistered()` |
+| `src/wabot/main.py` | FastAPI app: the HTTP endpoints Telegram and Meta call, `reply()` (the background job that answers a trainee), `reply_unregistered()`, `send_telegram_notice()` |
+| `src/wabot/telegram.py` | Talking to Telegram: check the webhook's secret (derived from the bot token), parse an update, send a text (with the share-number button), set the webhook; errors without the token |
 | `src/wabot/whatsapp.py` | Talking to Meta: check the webhook signature, parse the payload, send a text |
-| `src/wabot/trainees.py` | Who is behind a phone number (`find_by_phone()`), normalizing numbers, finding or creating a trainer |
-| `src/wabot/conversation.py` | The glue: "is the bot mentioned?", chat history from the db, "did the trainee ask again?", send + store |
+| `src/wabot/trainees.py` | Who is behind a phone number (`find_by_phone()`) or a Telegram chat (`find_by_telegram()`, `link_telegram()`), normalizing numbers, finding or creating a trainer |
+| `src/wabot/conversation.py` | The glue: "is the bot mentioned?", chat history from the db (both channels), "did the trainee ask again?", send + store on a channel |
 | `src/wabot/assistant.py` | Talking to OpenAI: build the prompt, call the model, retry on invalid output |
 | `src/wabot/llm_output.py` | The shape of the model's answer (pydantic models → JSON schema) and `validate_output()` |
 | `src/wabot/entries.py` | Saving the extracted weight and training into the db (a new row per report; `DAILY_UPDATES_ONLY` updates the day's row instead) |
@@ -34,7 +35,7 @@ A walk through what happens at runtime: which function calls which, in what orde
 | `plans/upper_lower.yaml`, `plans/beginner_fbw.yaml` | Two more real plans: an upper/lower split on fixed weekdays, and two alternating full-body workouts for a beginner |
 | `scenarios/*.yaml` | A month of reports per simulated trainee (Kasia, Tomek, Ola: one plan each, two trainers): the messages, the answer a correct model gives, and what must be saved. The format is explained at the top of `kasia.yaml` |
 | `src/wabot/simulation.py` | Replays the scenarios through `main.reply()` at simulated times (used by the month test and `scripts/simulate_month.py`, not by the app) |
-| `run.sh` | Local start: migrate, test message, tunnel, webhook, uvicorn |
+| `run.sh` | Local start: migrate, messenger check, tunnel, webhook (of `CHANNEL`), uvicorn |
 | `run_dashboard.sh` | Local dashboard: uvicorn on `simulated_month.db` with the dev login (fills it with `--canned` if it's missing) |
 | `scripts/` | One-off command-line tools (see Flows 3 and 5) |
 
@@ -46,13 +47,14 @@ Some files do work the moment they're imported, once per process:
 - `db.py`: creates the SQLAlchemy `engine` from `DATABASE_URL` (default `sqlite:///wabot.db`) and the `SessionLocal` session factory. For SQLite it turns on WAL, a 5 s busy timeout and foreign keys.
 - `exercises.py`: reads `exercises.yaml` into `CATALOG` (a list of `CatalogExercise`), `IDS`, `BY_ID` and a name/alias → ID table for `lookup()`. Fails on duplicate IDs. `ExerciseId = Literal[IDS]` fixes the allowed exercise IDs at this point, for plans and for the LLM's output.
 - `assistant.py`: reads `prompts.yaml` into `PROMPTS`.
-- `main.py`: sets up logging and creates the FastAPI `app`.
+- `telegram.py`: turns httpx's INFO logging off (each line has the request URL, which for Telegram has the bot token).
+- `main.py`: sets up logging and creates the FastAPI `app`. When uvicorn starts it, it logs a warning if the active channel's settings are missing (`Settings.missing_for_channel()`).
 
 So a change to `.env`, `prompts.yaml` or `exercises.yaml` needs a restart. `run.sh` starts uvicorn with `--reload-include "*.yaml"`, so YAML changes restart it by themselves. A trainee's plan is read from the db on every reply, so changing it with `scripts/add_trainee.py` needs no restart.
 
-## Flow 1: a trainee sends a WhatsApp message
+## Flow 1: a trainee sends a message (WhatsApp)
 
-This is the main flow. Example: the trainee writes *"yanek dzisiaj waga 80,1 kg"*.
+This is the main flow. Example: the trainee writes *"yanek dzisiaj waga 80,1 kg"*. The bot runs on Telegram now (`CHANNEL=telegram`); Telegram's webhook (Flow 1b) differs only in how it finds the trainee, and from `main.reply()` on everything is the same for both.
 
 ```
 Meta ──POST /webhook──► main.receive_webhook()
@@ -61,10 +63,10 @@ Meta ──POST /webhook──► main.receive_webhook()
   ├─ whatsapp.parse_messages(payload)         → list[InboundMessage(wamid, phone, type, text)]
   └─ for each message:
        ├─ trainees.find_by_phone(session, phone)   → Trainee or None
-       ├─ INSERT Message(direction="in", ...)   into the messages table
+       ├─ INSERT Message(channel="whatsapp", external_id=wamid, direction="in", ...)
        │     registered:     with body, trainee_id, trainer_id
        │     not registered: without the text (only what dedup needs)
-       │     wamid already there (Meta redelivered) → rollback, skip it
+       │     external_id already there (Meta redelivered) → rollback, skip it
        ├─ not registered        → background.add_task(reply_unregistered, msg)
        ├─ mentions_bot(text)    → background.add_task(reply, message.id)
        └─ otherwise             → nothing; the message waits as history
@@ -85,9 +87,12 @@ main.reply(message_id)                          runs after the 200, in the backg
   │     entries.save(session, trainee, message, result)   (see Flow 2b)
   │         fails → APOLOGY (the reply would confirm something that isn't saved)
   │     otherwise → result.reply, and log "Saved weight/training from ..."
-  └─ conversation.send_and_store(settings, trainee, text)
-        ├─ whatsapp.send_text()  → POST graph.facebook.com/.../messages → wamid
-        └─ INSERT Message(direction="out", trainee_id, trainer_id, ...)
+  └─ conversation.send_and_store(settings, trainee, text, message.channel)   back where it came from
+        ├─ conversation.send_text()
+        │     "whatsapp" → whatsapp.send_text(phone)  → POST graph.facebook.com/.../messages → wamid
+        │     "telegram" → telegram.send_text(chat_id, markdown=True) → "tg:<chat>:<id>"
+        │                  (no chat yet → NotOnTelegramError, logged)
+        └─ conversation.store_sent() → INSERT Message(channel, direction="out", ...)
 
 main.reply_unregistered(msg)
   └─ whatsapp.send_text(phone, UNREGISTERED)   "Ten numer nie jest zarejestrowany – ..."; not stored
@@ -97,12 +102,48 @@ Things to notice:
 
 - **Every message from a trainee is stored**, with or without "yanek". Messages without the name become context the next time the bot is asked.
 - **Unknown numbers** get the fixed reply to every message and never reach the LLM. Register yourself with `scripts/add_trainee.py` (Flow 5), or the bot answers you with that too.
-- **Dedup is the unique `wamid` column.** Meta sometimes delivers the same webhook twice; the second insert fails and is skipped, so the bot doesn't answer twice.
+- **Dedup is the unique `external_id` column** (WhatsApp's wamid, or `tg:<chat>:<message>`). Meta and Telegram sometimes deliver the same message twice; the second insert fails and is skipped, so the bot doesn't answer twice.
 - **The reply runs after the HTTP response.** Meta wants a fast 200; an OpenAI call can take seconds. In production this becomes a Cloud Task (that's why `reply()` takes a message ID: it's what a task would carry).
 - **Saving comes before sending.** The trainee only gets a confirmation for what is actually in the db.
 - **Errors never reach the trainee as a stack trace.** A failed LLM call or save sends `APOLOGY`; a failed send is only logged.
 
-`GET /webhook` (`verify_webhook()`) is separate: Meta calls it once when the Callback URL is set, and the bot answers with `hub.challenge` if `hub.verify_token` matches `WHATSAPP_VERIFY_TOKEN`. `GET /` is a plain health check (open `<tunnel url>/` in a browser to see that the bot is reachable).
+`GET /webhook` (`verify_webhook()`) is separate: Meta calls it once when the Callback URL is set, and the bot answers with `hub.challenge` if `hub.verify_token` matches `WHATSAPP_VERIFY_TOKEN`. Without `WHATSAPP_APP_SECRET` / `WHATSAPP_VERIFY_TOKEN` both WhatsApp endpoints refuse everything (anyone could sign with an empty secret). `GET /` is a plain health check (open `<tunnel url>/` in a browser to see that the bot is reachable).
+
+## Flow 1b: a trainee writes on Telegram
+
+Telegram doesn't send the phone number, so the first thing in a new chat is connecting it to the trainee the trainer registered (by phone).
+
+```
+Telegram ──POST /telegram/webhook──► main.receive_telegram()
+  ├─ telegram.verify_secret(settings, X-Telegram-Bot-Api-Secret-Token)    wrong / no token → 401
+  │     the secret is telegram.webhook_secret(): an HMAC of the bot token, given to Telegram by setWebhook
+  ├─ telegram.parse_update(update) → InboundMessage(external_id "tg:<chat>:<id>", chat_id, user_id,
+  │                                                 private, type, text, contact_phone, contact_user_id)
+  │     not a message (an edit, ...) or not a private chat (a group) → 200, nothing else
+  ├─ trainees.find_by_telegram(chat_id)              → Trainee or None
+  ├─ None, and the message is the sender's own number (contact.user_id == from.id):
+  │     trainees.link_telegram(phone, chat_id)  normalize the number, find the trainee by it,
+  │                                             trainee.telegram_chat_id = chat_id
+  ├─ INSERT Message(channel="telegram", external_id, ...)
+  │     a (now) known trainee: with body, phone, trainee_id, trainer_id
+  │     anyone else:           only what dedup needs
+  │     external_id already there (Telegram redelivered) → rollback, 200
+  └─ then, in the background:
+        just connected      → send_telegram_notice(TELEGRAM_LINKED, REMOVE_KEYBOARD, trainee)  stored
+        unknown, own number → send_telegram_notice(UNREGISTERED, ASK_FOR_PHONE)                not stored
+        unknown, anything else (/start, text, someone else's contact card)
+                            → send_telegram_notice(TELEGRAM_ASK_FOR_PHONE, ASK_FOR_PHONE)       not stored
+        trainee, "/start"   → send_telegram_notice(TELEGRAM_HELP, trainee)                     stored
+        trainee, "yanek"    → main.reply(message.id)   the same as in Flow 1; the reply goes to Telegram
+        trainee, otherwise  → nothing; the message waits as history
+```
+
+- **`ASK_FOR_PHONE`** is a keyboard with one button, "Udostępnij numer telefonu" (`request_contact`). Pressing it sends the trainee's own number, which Telegram has verified; a contact card from the address book has another `user_id` and connects nobody.
+- **A new Telegram account** (another phone, a reinstall): sharing the number again moves the trainee to the new chat; the old chat is then a stranger's.
+- **What the bot told a trainee is history**: the welcome and the help are stored as bot messages, so the model sees "[wiadomość typu contact]" followed by the welcome, then the reports. Texts to strangers aren't stored, like `UNREGISTERED` on WhatsApp.
+- **Formatting**: the model writes WhatsApp's `*bold*` / `_italic_` (the prompt asks for chat formatting), which is Telegram's legacy Markdown too, so replies go with `parse_mode=Markdown`. If Telegram can't parse it (a stray `*` or `_`), `telegram.send_text()` sends the text as it is.
+- **The bot token is in every API URL** (`api.telegram.org/bot<token>/sendMessage`). `telegram._call()` raises `TelegramError` with Telegram's own description and hides httpx's exception (which carries the URL); httpx's request logging is off. A failed send is logged as e.g. `sendMessage: 403 Forbidden: bot was blocked by the user`.
+- **One history across channels**: `recent_history()` reads the trainee's messages whatever their channel, so a trainee who moves from WhatsApp to Telegram keeps the context.
 
 ## Flow 2: the LLM call
 
@@ -230,7 +271,7 @@ entries.save()
 
 ## Flow 3: the bot starts a conversation itself
 
-Only the script `scripts/send_test_custom_first_message.py` does this so far; later the scheduler will (reminders).
+Only the script `scripts/send_test_custom_first_message.py` does this so far; later the scheduler will (reminders). The message goes to the active channel (`CHANNEL`); on Telegram the trainee must have connected first (the script says so), and WhatsApp's 24-hour window doesn't apply.
 
 ```
 send_test_custom_first_message.py
@@ -243,8 +284,8 @@ send_test_custom_first_message.py
   │         and the last turn is a fake user turn "[automatyczny wyzwalacz] Dzisiaj jest ..."
   │         only .reply is used, nothing is saved
   ├─ --dry-run → print and stop
-  ├─ no inbound message in 24 h → warning (WhatsApp will probably drop it)
-  └─ conversation.send_and_store()
+  ├─ WhatsApp, no inbound WhatsApp message in 24 h → warning (WhatsApp will probably drop it)
+  └─ conversation.send_and_store()   on CHANNEL
 ```
 
 ## Flow 4: `bash run.sh`
@@ -252,11 +293,17 @@ send_test_custom_first_message.py
 ```
 run.sh
   1. uv run alembic upgrade head            create/upgrade wabot.db
-  2. uv run python scripts/send_test.py     template message to your phone = token works
+  2. uv run python scripts/send_test.py     the messenger works:
+       telegram: getMe with the token → "bot @x works, https://t.me/x"; if WHATSAPP_TEST_RECIPIENT is a
+                 connected trainee, a test message to them (otherwise how to connect)
+       whatsapp: a template message to WHATSAPP_TEST_RECIPIENT
   3. (unless TUNNEL=0) start cloudflared → .cloudflared.log, killed again on exit
   4. in the background:
        wait up to 30 s for https://xxx.trycloudflare.com in the log
-       → scripts/set_webhook.py <url>
+       → scripts/set_webhook.py <url>           (for CHANNEL)
+         telegram: telegram.set_webhook(<url>/telegram/webhook) with the secret, retried until
+                   Telegram accepts it; prints the bot's link
+         whatsapp:
            app ID from WHATSAPP_APP_ID or GET /app with the token
            every 5 s, for up to 2 minutes (WAIT_FOR_TUNNEL, RETRY_EVERY):
              POST /{app_id}/subscriptions with callback_url=<url>/webhook,
@@ -289,7 +336,7 @@ add_trainee.py [--phone] [--name] [--trainer] [--plan FILE | --no-plan] [--conse
   │             consent date today, Europe/Warsaw, trainer --trainer or "Trener testowy"
   │             (trainees.trainer_named() finds the trainer or creates it)
   │     found → only the options you pass change
-  └─ COMMIT, print what is saved
+  └─ COMMIT, print what is saved; not on Telegram yet → how to connect (open the bot, share the number)
 ```
 
 With no options it registers your own number with the example plan, which is all you need for local testing. The plan is saved as JSON (`plans.to_db()`).
@@ -384,10 +431,10 @@ trainers ──< plan_templates          (the trainer's plan library)
 | Table | Columns | |
 |---|---|---|
 | `trainers` | `id`, `name`, `email` (unique, null until set), `created_at` | created by `scripts/add_trainee.py` for now; `email` is the Google account for the dashboard |
-| `trainees` | `id`, `trainer_id`, `phone` (unique), `name`, `timezone`, `consent_date`, `plan_version_id` (null without a plan), `created_at` | `phone` is how a message finds its trainee; `plan_version_id` is the current plan, one of the trainee's own `trainee_plans` rows (foreign key `(id, plan_version_id)` → `(trainee_id, id)`), read with `plans.of(trainee)` |
+| `trainees` | `id`, `trainer_id`, `phone` (unique), `telegram_chat_id` (unique, null until connected), `name`, `timezone`, `consent_date`, `plan_version_id` (null without a plan), `created_at` | `phone` is how a WhatsApp message finds its trainee, `telegram_chat_id` how a Telegram one does (set when the trainee shares that phone number with the bot; migration 0010); `plan_version_id` is the current plan, one of the trainee's own `trainee_plans` rows (foreign key `(id, plan_version_id)` → `(trainee_id, id)`), read with `plans.of(trainee)` |
 | `plan_templates` | `id`, `trainer_id`, `name` (unique per trainer), `plan` (JSON), `created_at`, `updated_at` | the trainer's library; assigning copies `plan` into `trainee_plans` |
 | `trainee_plans` | `id`, `trainer_id`, `trainee_id`, `plan` (JSON, a `plans.TrainingPlan`), `source`, `template_id` (null when not from the library, or deleted), `name`, `created_at` | written only by `plan_history.assign()`, which also moves the trainee's pointer; unique `(trainee_id, id)` for the two foreign keys that point here; migration 0006 made each plan already on a trainee its first version (`imported`), 0007 replaced the copy on the trainee with the pointer |
-| `messages` | `id`, `wamid` (unique), `direction` (`in`/`out`), `phone`, `type`, `body`, `trainee_id`, `trainer_id`, `created_at` | chat history and webhook dedup; `body` and `trainee_id` are null for unregistered numbers (and for messages from before migration 0002) |
+| `messages` | `id`, `channel` (`telegram`/`whatsapp`), `external_id` (unique), `direction` (`in`/`out`), `phone`, `type`, `body`, `trainee_id`, `trainer_id`, `created_at` | chat history and webhook dedup; `external_id` is WhatsApp's wamid or `tg:<chat>:<message>`; `body` and `trainee_id` are null for people who aren't registered (and for messages from before migration 0002), `phone` too on Telegram. Migration 0010 renamed `wamid` to `external_id` and marked the older messages `whatsapp` |
 | `weight_entries` | `id`, `trainer_id`, `trainee_id`, `date`, `kg`, `message_id`, `created_at`, `updated_at` | |
 | `training_checkins` | `id`, `trainer_id`, `trainee_id`, `date`, `plan_version_id`, `plan_day_id`, `plan_day`, `outside_plan`, `status`, `missed_exercises` (JSON list of exercise IDs), `notes`, `message_id`, `created_at`, `updated_at` | `plan_version_id`: the trainee's plan version the report was checked against (null without a plan); `plan_day_id` the day's ID (the same across renames and versions), `plan_day` its name in that version. Migration 0007 filled `plan_version_id` for older check-ins with the version current at their `updated_at`; 0008 gave stored plan days their IDs (by name along each trainee's versions) and check-ins their `plan_day_id`. `outside_plan`: training outside the plan (a run), the other kind of a day's training; migration 0009 set it by the same rule as `entries.outside_plan()` |
 | `training_exercises` | `id`, `checkin_id`, `exercise_id`, `name`, `in_plan`, `sets`, `reps`, `weight_kg`, `replaces`, `comment` | same fields as `llm_output.Exercise`; `exercise_id` is the catalog ID progress is charted by, `replaces` the ID of the replaced plan exercise |
@@ -415,6 +462,8 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 | change how the plan looks to the LLM | `TrainingPlan.prompt_text()` in `plans.py`, and the `training_plan` text in `prompts.yaml` that explains the format |
 | register another trainee | `uv run python scripts/add_trainee.py --phone 48... --name ...` |
 | change the reply for unknown numbers | `UNREGISTERED` in `main.py` |
+| switch the messenger | `CHANNEL=telegram` or `CHANNEL=whatsapp` in `.env` (its settings filled in), restart `run.sh`; trainees then write to that messenger. Nothing to migrate |
+| change what the Telegram bot says before the LLM is involved | `TELEGRAM_ASK_FOR_PHONE`, `TELEGRAM_HELP`, `TELEGRAM_LINKED` in `main.py`; the button's text in `telegram.ASK_FOR_PHONE` |
 | change the trigger word | `BOT_NAME` in `conversation.py` |
 | change how much history the model sees | `HISTORY_WINDOW` / `HISTORY_LIMIT` in `conversation.py` |
 | change the model | `OPENAI_MODEL` in `.env` (default in `config.py`) |
@@ -432,16 +481,17 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 
 - **Corrections of older reports.** The LLM doesn't see what's saved, only the chat history. A correction of a training whose report is no longer in the history (older than 24 h or 20 messages, or always with `HISTORY_MODE=new_only`) replaces that day with just the corrected part. Milestone 4: show the LLM the saved entries of the last days.
 - **Diet reports** are only acknowledged, not extracted or saved.
-- The dashboard has the trainee list, the weight chart, the training calendar, the plan with its editor and history, and the plan library. The calendar has no expected sessions yet ("A planned, no report", "2/3 this week"): the plan fields `weekdays` and `sessions_per_week` aren't built. Trainers can't add their own exercises to the catalog yet. Google sign-in is built but untested against real Google until there's an OAuth client ID. No reminders, no photos.
+- The dashboard has the trainee list, the weight chart, the training calendar, the plan with its editor and history, and the plan library. The calendar has no expected sessions yet ("A planned, no report", "2/3 this week"): the plan fields `weekdays` and `sessions_per_week` aren't built. Trainers can't add their own exercises to the catalog yet. Google sign-in is built but untested against real Google until there's an OAuth client ID. No reminders, no photos. The dashboard doesn't show whether a trainee has connected on Telegram yet.
 
 ## Tests
 
 `uv run pytest`. `tests/conftest.py` points the app at a temporary SQLite db (tables recreated for every test) and sets fake tokens and keys as environment variables. It turns `.env` off for tests, so they don't depend on your local settings: only those values and the code's defaults apply. No test calls WhatsApp or OpenAI.
 
+- `test_telegram.py`: Flow 1b: the secret (refused without it, or without a bot token), a new chat asked for the number, the own number connecting the trainee (with a "+"), someone else's contact card and an unregistered number connecting nobody, a new Telegram account taking over, `/start` again, redelivery, groups and edits ignored, a photo stored without text, one history across WhatsApp and Telegram with each reply going back where its message came from, a failed send logged; the client: the request it sends, errors never showing the token (also in the traceback), httpx's logging off, the formatting fallback, the derived secret, parsing; `missing_for_channel()`, `scripts/set_webhook.py` on Telegram, WhatsApp refusing everything without its secrets. `tests/conftest.py` makes any Telegram API call in a test fail (`no_telegram`).
 - `test_webhook.py`: Flow 1 through FastAPI's test client, with the LLM and `send_text` replaced by fakes: replies, dedup, unregistered numbers, saving, corrections, a failed save, a message followed up on. Its `add_trainee()` helper is used by the other test files.
 - `test_entries.py`: Flow 2b: one entry per day, corrections, out-of-order saves, exercises replaced, a check-in's plan version (the new one after a plan change, none without a plan), the database refusing another trainee's version, trainings before and after a day is renamed having the same day ID; the two kinds of training (what counts as outside the plan; a run on a plan day is a second training and its correction changes only the run; another plan day on the same date, or the day after "który to był dzień?", is a correction), in both `DAILY_UPDATES_ONLY` modes.
 - `test_conversation.py`: the name trigger, history per trainee, `asked_again()`, plan injection and the plan text, bad plans, the example plan, `exercises.lookup()`, the trainee's local date, `scripts/add_trainee.py`.
 - `test_month_scenario.py`: the three trainees of `scenarios/` (15 reports each in October 2026, three plans, two trainers), interleaved in time order through the whole reply flow (`simulation.Replay` → `main.reply()` → `_complete()` with a fake OpenAI client returning the scenario's answer → `validate_output()` → `entries.save()`). After every message it checks that the model got only that trainee's messages and the simulated date, and what was saved: weight, plan day, status, missed exercises, exercise IDs and replacements. Runs in both `DAILY_UPDATES_ONLY` modes. Some answers say `done` where the code must make it `partial`. Kasia runs in the morning of a day B: both are that day's trainings.
 - `test_dashboard.py`: Flow 6: pages redirect to the login page without a session, the dev login only with `DASHBOARD_DEV_LOGIN`, a trainer sees only their own trainees (404 on another trainer's, also absent from the dropdown), the dropdown keeps the page, tampered or wrongly signed cookies, logout; the weight page (the newest report per day, the message, Ola's data not on Kasia's page, a message can't break out of the JSON script tag, no weigh-ins), the "Wybierz podopiecznego" hint, the Polish date, month, kg and dose formats; the trainings page (the month's cells and their marks, a run beside a plan day, the correction counts, the week counts, the details with missed exercises, replacements and messages, another trainee's trainings absent; a day's label follows the current plan by the day ID; months: days of the next and previous month, this month by default and for a bad `month`, no month after this one, a link to the last training; no trainings); the plan pages (every change a version and an unchanged save none, preview and restore, another trainee's version is 404, library plans created with a name of their own, assigning copies so library edits and deletes don't change the trainee, an edit keeps the library link, copying a trainee's plan to the library, another trainer's library is 404 everywhere), the plan editor (the plan shown with catalog names, a new plan, saving trims and drops empty fields, every rule refused with its Polish message and nothing saved, every day gets a label and it moves with its day, the typed values shown again, broken JSON is an error and not a crash, another trainer's plan is 404, the bot's prompt has the edited plan); Google sign-in with Google's token check faked: the trainer found by email (any case), refused for an unknown email, an unverified email or a forged token, the CSRF check, off without `GOOGLE_CLIENT_ID`.
-- `test_schema.py`: the migrations build exactly the models' schema (`alembic upgrade head` on an empty db, compared like `alembic check`), every migration can be undone and redone, migration 0007 on rows in the old shape (the pointer to the version with the same plan, a new version where the copy differed, no pointer without a plan, check-ins linked by time, the copies back on downgrade), migration 0008 (a library copy takes the library plan's day IDs, the next version keeps them by name, a renamed or new day gets a new ID, check-ins get their day's, downgrading removes them), migration 0009 (only a check-in without a plan day, not skipped and with nothing from the plan is outside the plan; the exercises survive), and no exercise ID disappears from the catalog (`tests/catalog_ids.txt` lists every ID ever used; a new ID goes at its end).
+- `test_schema.py`: the migrations build exactly the models' schema (`alembic upgrade head` on an empty db, compared like `alembic check`), every migration can be undone and redone, migration 0007 on rows in the old shape (the pointer to the version with the same plan, a new version where the copy differed, no pointer without a plan, check-ins linked by time, the copies back on downgrade), migration 0008 (a library copy takes the library plan's day IDs, the next version keeps them by name, a renamed or new day gets a new ID, check-ins get their day's, downgrading removes them), migration 0009 (only a check-in without a plan day, not skipped and with nothing from the plan is outside the plan; the exercises survive), migration 0010 (older messages become WhatsApp ones with their wamid as `external_id`, still unique; a Telegram message without a number; a chat ID only once and bigger than 32 bits; downgrading back), and no exercise ID disappears from the catalog (`tests/catalog_ids.txt` lists every ID ever used; a new ID goes at its end).
 - `test_llm_output.py`: `validate_output()` accepting and rejecting outputs (incl. the checks against the plan's IDs and catalog matching by name), the retry in `_complete()` with a fake OpenAI client, the schema.

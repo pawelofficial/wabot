@@ -33,7 +33,7 @@ def current_per_day(session: Session, model, trainee: Trainee) -> list:
 
 
 def _messages(session: Session, rows) -> dict[int, Message]:
-    """The WhatsApp messages the rows were saved from, by ID."""
+    """The messages the rows were saved from, by ID."""
     ids = [r.message_id for r in rows if r.message_id]
     return {m.id: m for m in session.scalars(select(Message).where(Message.id.in_(ids)))}
 
@@ -42,7 +42,7 @@ def _messages(session: Session, rows) -> dict[int, Message]:
 class WeighIn:
     date: dt.date
     kg: float
-    message: str | None  # the WhatsApp message the weight was saved from
+    message: str | None  # the message the weight was saved from
     reports: int  # how many reports that day had (more than 1: the trainee corrected it)
 
     def as_json(self) -> dict:
@@ -77,7 +77,7 @@ class Workout:
     the plan), with what the calendar shows about it."""
 
     checkin: TrainingCheckin
-    message: Message | None  # the WhatsApp message it was saved from
+    message: Message | None  # the message it was saved from
     reports: int  # reports of this kind that day (more than 1: the trainee corrected it)
     # Its plan day's letter (A): in the current plan if the day is still in it (found by the
     # day's ID, so a renamed day keeps its letter), else in the version it was saved against.

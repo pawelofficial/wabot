@@ -1,4 +1,5 @@
-"""Conversation flow shared by the webhook and the scripts: history, composing and sending."""
+"""Conversation flow shared by the webhooks and the scripts: history, composing and sending (on
+Telegram or WhatsApp; the rest of the app doesn't know which)."""
 
 import re
 from datetime import datetime, timedelta
@@ -6,14 +7,15 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from wabot import assistant, utils, whatsapp
+from wabot import assistant, telegram, utils, whatsapp
 from wabot.config import Settings
 from wabot.db import SessionLocal
 from wabot.models import Message, Trainee
 
 HISTORY_WINDOW = timedelta(hours=24)
 HISTORY_LIMIT = 20
-# WhatsApp delivers free-form messages only within 24 h of the trainee's last message.
+# WhatsApp delivers free-form messages only within 24 h of the trainee's last message there.
+# Telegram has no such window.
 SERVICE_WINDOW = timedelta(hours=24)
 # The bot answers only messages that mention it by name, in any Polish case ("yanku", "yanka").
 BOT_NAME = re.compile(r"\byan(?:ek|ka|ku|kiem|kowi)\b", re.IGNORECASE)
@@ -56,11 +58,13 @@ def asked_again(session: Session, message: Message) -> bool:
 
 
 def in_service_window(session: Session, phone: str, now: datetime) -> bool:
-    """Whether the trainee wrote to the bot recently enough for free-form messages."""
+    """Whether the trainee wrote to the bot on WhatsApp recently enough for free-form messages
+    there."""
     last_inbound = session.scalar(
         select(Message.id)
         .where(
             Message.phone == phone,
+            Message.channel == "whatsapp",
             Message.direction == "in",
             Message.created_at >= now - SERVICE_WINDOW,
         )
@@ -78,13 +82,42 @@ def compose_first_message(
     return assistant.generate_first_message(settings, trainee, history, now)
 
 
-def send_and_store(settings: Settings, trainee: Trainee, text: str) -> str:
-    """Send a text message to the trainee and save it as chat history. Returns its wamid."""
-    wamid = whatsapp.send_text(settings, trainee.phone, text)
+class NotOnTelegramError(Exception):
+    """The trainee hasn't connected to the Telegram bot yet, so the bot can't write to them."""
+
+
+def send_text(settings: Settings, channel: str, trainee: Trainee, text: str) -> str:
+    """Send a text message to the trainee on `channel`. Returns its external ID."""
+    if channel == "telegram":
+        if trainee.telegram_chat_id is None:
+            raise NotOnTelegramError(
+                f"{trainee.name} ({trainee.phone}) hasn't shared their number with the Telegram "
+                "bot yet: they open it and press „Udostępnij numer telefonu”"
+            )
+        # The bot's texts use the chat formatting the prompt asks for (*bold*, _italic_).
+        return telegram.send_text(settings, trainee.telegram_chat_id, text, markdown=True)
+    return whatsapp.send_text(settings, trainee.phone, text)
+
+
+def send_and_store(
+    settings: Settings, trainee: Trainee, text: str, channel: str | None = None
+) -> str:
+    """Send a text message to the trainee and save it as chat history. Returns its external
+    ID. `channel`: where to send it; a reply goes where the message it answers came from,
+    a message the bot starts itself to CHANNEL (the default)."""
+    channel = channel or settings.channel
+    external_id = send_text(settings, channel, trainee, text)
+    store_sent(trainee, channel, external_id, text)
+    return external_id
+
+
+def store_sent(trainee: Trainee, channel: str, external_id: str, text: str) -> None:
+    """Save a text the bot sent to the trainee as chat history."""
     with SessionLocal() as session:
         session.add(
             Message(
-                wamid=wamid,
+                channel=channel,
+                external_id=external_id,
                 direction="out",
                 phone=trainee.phone,
                 type="text",
@@ -94,4 +127,3 @@ def send_and_store(settings: Settings, trainee: Trainee, text: str) -> str:
             )
         )
         session.commit()
-    return wamid

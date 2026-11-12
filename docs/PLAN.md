@@ -1,6 +1,6 @@
 # wabot – project plan
 
-A WhatsApp assistant for personal trainers. Trainees report weight, training and diet adherence in free-form Polish messages; an LLM turns them into structured records, holds short back-and-forth conversations, and answers questions about the trainee's arrangement with their trainer. Trainers manage everything in a web dashboard.
+A messenger assistant for personal trainers (on Telegram for now, WhatsApp later; see "Messenger" below). Trainees report weight, training and diet adherence in free-form Polish messages; an LLM turns them into structured records, holds short back-and-forth conversations, and answers questions about the trainee's arrangement with their trainer. Trainers manage everything in a web dashboard.
 
 ## Decisions
 
@@ -12,15 +12,26 @@ A WhatsApp assistant for personal trainers. Trainees report weight, training and
 | Reminders | Yes – the bot messages trainees on a schedule |
 | Missed reports | Trainer sees them on the dashboard; no alerts |
 | Trainer interface | Dashboard only (trainers don't chat with the bot) |
-| WhatsApp number | One shared bot number for all trainers; trainees are mapped to their trainer by phone number |
+| Messenger | Telegram for now, WhatsApp kept in the code; one setting switches (`CHANNEL`, decided 2026-11-12, see below) |
+| Bot number | One shared bot for all trainers; trainees are mapped to their trainer by phone number (on Telegram, the number they share with the bot once) |
 | Consent (GDPR) | Collected on paper, offline; the app only records that it's on file |
 | Photos | Stored and shown on the dashboard; not sent to the LLM (after the MVP) |
 | Trainer accounts | Created by hand by the operator |
 | Changing trainers | Never: a trainee stays with the trainer who registered them, with all their messages, entries and plans (decided 2026-11-04) |
 
+### Messenger: Telegram now, WhatsApp later (decided 2026-11-12)
+
+Meta restricted the WhatsApp Business Account used for development ("activity that does not comply with WhatsApp Business terms"; the review asks for business verification, which needs a registered business). A Telegram bot needs none of that: a token from @BotFather, no review, no 24-hour window, no paid templates. So the bot runs on Telegram until trainers say their clients would rather use WhatsApp; then it moves back.
+
+- **One setting switches**: `CHANNEL=telegram` (default) or `CHANNEL=whatsapp` in `.env` picks the webhook `run.sh` registers, where messages the bot starts itself go (first messages, later reminders), and which settings are required. Replies always go back on the channel the trainee's message came from, so both webhooks can be live at once.
+- **Everything else is shared**: trainees, plans, entries and the dashboard don't know the channel. `messages` is one table with a `channel` column, so a trainee's history continues across a switch.
+- **Who is writing**: WhatsApp sends the phone number with every message; Telegram doesn't. A new Telegram chat gets a "Udostępnij numer telefonu" button; the trainee presses it once, the bot matches the number to the one the trainer registered and keeps the chat ID (`trainees.telegram_chat_id`). Only the sender's own number counts (Telegram has verified it), not a contact card. Trainers still register trainees by phone.
+- **What moving back to WhatsApp needs**: business verification (a registered business, e.g. a sole proprietorship), the restriction lifted or a new account, approved templates for reminders.
+- **Reach**: far fewer people in Poland have Telegram than WhatsApp. Ask the first trainers whether their clients would install it.
+
 ## Trainee onboarding
 
-Because consent is collected on paper, **the trainer registers each trainee in the dashboard** (name, phone number, consent-on-file date). There are no self-service join codes. A message from an unregistered number gets a fixed Polish reply ("Ten numer nie jest zarejestrowany – skontaktuj się ze swoim trenerem") to every message, and nothing is stored beyond what deduplication needs: the message ID, number and type, not the text. Until the dashboard exists, `scripts/add_trainee.py` registers trainees and their trainer (decided 2026-11-03).
+Because consent is collected on paper, **the trainer registers each trainee in the dashboard** (name, phone number, consent-on-file date). There are no self-service join codes. On Telegram the trainee then opens the bot (`t.me/<bot>`) and shares their number with one button; that connects the chat to the registered trainee. A message from an unregistered number gets a fixed Polish reply ("Ten numer nie jest zarejestrowany – skontaktuj się ze swoim trenerem") to every message, and nothing is stored beyond what deduplication needs: the message ID, number and type, not the text. Until the dashboard exists, `scripts/add_trainee.py` registers trainees and their trainer (decided 2026-11-03).
 
 ## What the bot handles
 
@@ -65,6 +76,7 @@ The trainee identity is resolved server-side from the sender's phone number and 
 
 - The trainer sets a reminder schedule per trainee in the dashboard (e.g. weigh-in Mon/Thu 8:00, diet check daily 21:00, training check after planned session days).
 - Cloud Scheduler calls the service every ~15 min; it finds reminders that are due (in each trainee's timezone) and sends them.
+- Telegram has no restrictions here: a bot may write to anyone who has started a chat with it, at any time, for free.
 - WhatsApp only allows free-form business messages within 24 h of the trainee's last message. Outside that window, reminders must use **Meta-approved message templates** (category: utility, language: `pl`). Templates are paid per delivered message – check current Meta pricing for Poland.
 - Sent reminders are stored in the trainee's chat history so the LLM understands the reply.
 - Dashboard "missed report" = no matching submission within some time after a reminder or schedule slot.
@@ -151,9 +163,9 @@ A month view per trainee (built 2026-11-04, see step 4 above). Each day shows th
 
 | Layer | Choice |
 |---|---|
-| WhatsApp | Meta WhatsApp Cloud API (direct) |
+| Messenger | Telegram Bot API (`CHANNEL=telegram`, webhook `/telegram/webhook` with a secret header) or Meta WhatsApp Cloud API (`CHANNEL=whatsapp`, webhook `/webhook` with a signature), both called directly with httpx |
 | Bot + dashboard | Python, FastAPI on Cloud Run (`europe-central2`) |
-| Async processing | Webhook verifies signature, stores message (unique `wamid` = dedup), acks 200, enqueues Cloud Task |
+| Async processing | Webhook verifies the signature or secret, stores the message (unique `external_id` = dedup), acks 200, enqueues Cloud Task |
 | AI | OpenAI Python SDK (Responses API), structured output (read tools still open); default model `gpt-5.6-luna` (switched from Anthropic on 2026-11-01 – existing OpenAI credit; from `gpt-5.4-mini` to Luna on 2026-11-03 – about 4x cheaper and as good in tests) |
 | Database | Cloud SQL Postgres, SQLAlchemy + Alembic |
 | Files | Cloud Storage (photos) |
@@ -164,7 +176,7 @@ A month view per trainee (built 2026-11-04, see step 4 above). Each day shows th
 
 ### Core data model
 
-`trainers` → `plan_templates` (the trainer's plan library) and `trainees` (phone, name, timezone, consent_date, plan_version_id → the current version; diet_plan and notes later) → `trainee_plans` (every version of the plan, stored once), → `weight_entries` (date, kg), `training_checkins` (date, plan_day, status, missed_exercises, notes) with `training_exercises`, later `diet_checkins`, `photos`, `reminder_schedules`; and `messages` (inbound and outbound, used as chat history and for dedup). Every trainee-owned row also carries `trainer_id`; exercise rows are reached only through their check-in, which carries it. Each entry keeps `message_id`, the trainee's message the bot answered when saving it, so the dashboard can show the original next to the entry. Built so far (2026-11-04): trainers, trainees, messages, weight_entries, training_checkins, training_exercises, plan_templates, trainee_plans.
+`trainers` → `plan_templates` (the trainer's plan library) and `trainees` (phone, name, timezone, consent_date, plan_version_id → the current version; diet_plan and notes later) → `trainee_plans` (every version of the plan, stored once), → `weight_entries` (date, kg), `training_checkins` (date, plan_day, status, missed_exercises, notes) with `training_exercises`, later `diet_checkins`, `photos`, `reminder_schedules`; and `messages` (inbound and outbound on either channel, used as chat history and for dedup). Every trainee-owned row also carries `trainer_id`; exercise rows are reached only through their check-in, which carries it. Each entry keeps `message_id`, the trainee's message the bot answered when saving it, so the dashboard can show the original next to the entry. Built so far (2026-11-04): trainers, trainees, messages, weight_entries, training_checkins, training_exercises, plan_templates, trainee_plans.
 
 ## Out of scope for now
 
@@ -186,7 +198,7 @@ The goal is the smallest version that a trainer can use with real trainees. Wher
 
 ## Risks
 
-- **Meta business verification and template approval** are slow and outside our control, so start milestone 6 while building the dashboard (milestone 3).
+- **Meta business verification and template approval** are slow and outside our control, and Meta restricted the development account in November 2026 (see "Messenger"). On Telegram neither applies; they matter again only when moving to WhatsApp.
 - **Health data under GDPR.** Keep all GCP resources in EU regions, and note that the OpenAI API processes message text (requests are sent with `store=false`) (check its data-processing terms and retention). The paper consent should mention both.
 - **Parsing mistakes.** Every save is confirmed back to the trainee, and corrections are supported. The dashboard shows the original message next to each entry so the trainer can check it.
 - **Cost:** LLM tokens per message and Meta template fees per reminder. Estimate both once message volumes are known.
@@ -212,7 +224,7 @@ Milestones 1–5 are developed and run **locally** (`bash run.sh` migrates the d
 3. **Dashboard** 🚧 in progress – trainer login, trainee registration, plan editing, weight chart, check-in history, last-report view (see "Site structure"). Moved ahead of the conversation milestone on 2026-11-04: basic reporting works, and seeing the saved data makes the conversation problems easier to spot.
 4. **Conversation** – clarifications, plan questions, corrections, diet reports. The chat history (24 h / 20 messages) already exists. Corrections need the LLM to see the trainee's saved entries of the last days (injected, or a `get_recent_entries` tool), so a correction of an older training doesn't replace the day with just the corrected part. Also open from the real-model simulation (2026-11-04): whether a moved workout on a rotation plan counts as skipped, and whether "trening 2 zrobiony!" plus one exercise means the whole day was done.
 5. **Reminders** – per-trainee schedules, Meta templates, Cloud Scheduler.
-6. **Go-live accounts** – start around milestone 3, since Meta's steps can take days to weeks.
+6. **Go-live accounts** – on Telegram: a production bot from @BotFather (name, picture, description). The WhatsApp steps below only when moving to WhatsApp; Meta's steps can take days to weeks.
    - Meta business verification (company documents); unverified accounts have low messaging limits.
    - Production bot number: a Polish prepaid SIM (decided – not a personal number, which would lose its WhatsApp account), never registered on WhatsApp. It only has to receive one verification SMS or call – no device stays connected – but keep the number active so it can be re-verified later.
    - Bot display name (Meta reviews it).

@@ -1,7 +1,8 @@
 """Register a trainee (and their trainer), or update one – until the dashboard does this.
 
 The bot answers only registered numbers; anyone else gets a fixed "not registered" reply. With
-no options this registers your own number (WHATSAPP_TEST_RECIPIENT) with the example plan.
+no options this registers your own number (WHATSAPP_TEST_RECIPIENT) with the example plan. On
+Telegram the trainee then opens the bot and shares that number with it (the bot asks).
 Running it again for the same number changes only the options you pass. A trainee never moves
 to another trainer (docs/PLAN.md), so --trainer is only for a new trainee.
 
@@ -137,6 +138,11 @@ def main(argv: list[str] | None = None) -> None:
             f"plan: {plan_summary}, "
             f"consent {trainee.consent_date}, {trainee.timezone}"
         )
+        if trainee.telegram_chat_id is None:
+            print(
+                "Telegram: not connected yet – open the bot (scripts/send_test.py prints its "
+                "link) on the phone with this number and press „Udostępnij numer telefonu”"
+            )
 
 
 if __name__ == "__main__":

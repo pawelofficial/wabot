@@ -218,6 +218,7 @@ def add_weight(trainee, day, kg, text):
     """A weight report as the bot saves it: the message, then the entry pointing at it."""
     with SessionLocal() as session:
         message = Message(
+            channel="telegram",
             direction="in",
             phone=trainee.phone,
             type="text",
@@ -875,6 +876,7 @@ def add_training(trainee, day, text, plan_day=None, exercises=(), status="done",
     with SessionLocal() as session:
         trainee = session.get(Trainee, trainee.id)
         message = Message(
+            channel="telegram",
             direction="in",
             phone=trainee.phone,
             type="text",

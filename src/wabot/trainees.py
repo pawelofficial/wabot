@@ -1,5 +1,5 @@
-"""Trainees and trainers: who is behind a phone number, and registering trainees until the
-dashboard does it (scripts/add_trainee.py)."""
+"""Trainees and trainers: who is behind a phone number or a Telegram chat, and registering
+trainees until the dashboard does it (scripts/add_trainee.py)."""
 
 import re
 
@@ -10,7 +10,8 @@ from wabot.models import Trainee, Trainer
 
 
 def normalize_phone(text: str) -> str:
-    """WhatsApp's form of a number: digits only, with the country code.
+    """A number as trainees.phone stores it: digits only, with the country code, the form
+    WhatsApp sends (a number shared on Telegram may start with "+").
 
     "+48 123 456 789" → "48123456789".
     """
@@ -35,6 +36,24 @@ def trainer_by_email(session: Session, email: str) -> Trainer | None:
 
 def find_by_phone(session: Session, phone: str) -> Trainee | None:
     return session.scalar(select(Trainee).where(Trainee.phone == phone))
+
+
+def find_by_telegram(session: Session, chat_id: int) -> Trainee | None:
+    return session.scalar(select(Trainee).where(Trainee.telegram_chat_id == chat_id))
+
+
+def link_telegram(session: Session, phone: str, chat_id: int) -> Trainee | None:
+    """The trainee registered with this number, now reached in this Telegram chat; None if no
+    trainee has the number. Only for the sender's own number (main.receive_telegram() checks):
+    Telegram has verified it. A trainee who writes from another Telegram account and shares
+    the number again moves to that chat."""
+    try:
+        trainee = find_by_phone(session, normalize_phone(phone))
+    except ValueError:
+        return None
+    if trainee is not None:
+        trainee.telegram_chat_id = chat_id
+    return trainee
 
 
 def trainer_named(session: Session, name: str) -> Trainer:

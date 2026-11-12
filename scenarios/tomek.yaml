@@ -4,6 +4,7 @@ name: Tomek
 trainer: Trener Marek
 trainer_email: marek.trener@example.com
 phone: "48000000002"
+telegram_chat_id: 700000002
 plan: plans/upper_lower.yaml
 plan_name: Góra/dół – 4 treningi siłowe
 

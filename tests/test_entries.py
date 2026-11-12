@@ -29,7 +29,12 @@ def report(trainee):
     def store(body: str = "yanek ...") -> Message:
         with SessionLocal() as session:
             msg = Message(
-                direction="in", phone=PHONE, type="text", body=body, trainee_id=trainee.id
+                channel="telegram",
+                direction="in",
+                phone=PHONE,
+                type="text",
+                body=body,
+                trainee_id=trainee.id,
             )
             session.add(msg)
             session.commit()

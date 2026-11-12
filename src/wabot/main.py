@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 import httpx
@@ -7,7 +8,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from wabot import assistant, conversation, entries, trainees, whatsapp
+from wabot import assistant, conversation, entries, telegram, trainees, whatsapp
 from wabot.config import Settings, get_settings
 from wabot.dashboard import routes as dashboard
 from wabot.db import SessionLocal, get_session
@@ -18,7 +19,20 @@ log = logging.getLogger(__name__)
 # uvicorn configures only its own loggers; this makes the app's INFO logs visible too.
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(name)s: %(message)s")
 
-app = FastAPI(title="wabot")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = get_settings()
+    if missing := settings.missing_for_channel():
+        log.warning(
+            "CHANNEL=%s, but %s isn't set in .env: the bot can't send or receive messages",
+            settings.channel,
+            ", ".join(missing),
+        )
+    yield
+
+
+app = FastAPI(title="wabot", lifespan=lifespan)
 # The trainers' dashboard under /dashboard.
 dashboard.install(app)
 
@@ -39,7 +53,11 @@ def verify_webhook(
     challenge: Annotated[str, Query(alias="hub.challenge")],
 ) -> str:
     """Meta calls this once when the webhook URL is saved in the app dashboard."""
-    if mode != "subscribe" or token != settings.whatsapp_verify_token:
+    if (
+        mode != "subscribe"
+        or not settings.whatsapp_verify_token
+        or token != settings.whatsapp_verify_token
+    ):
         raise HTTPException(status_code=403)
     return challenge
 
@@ -61,7 +79,13 @@ async def receive_webhook(
 
     for msg in whatsapp.parse_messages(payload):
         trainee = trainees.find_by_phone(session, msg.phone)
-        stored = Message(wamid=msg.wamid, direction="in", phone=msg.phone, type=msg.type)
+        stored = Message(
+            channel="whatsapp",
+            external_id=msg.wamid,
+            direction="in",
+            phone=msg.phone,
+            type=msg.type,
+        )
         if trainee is not None:
             stored.body = msg.text
             stored.trainee_id = trainee.id
@@ -85,8 +109,76 @@ async def receive_webhook(
     return {"status": "ok"}
 
 
+@app.post("/telegram/webhook")
+async def receive_telegram(
+    request: Request, settings: SettingsDep, session: SessionDep, background: BackgroundTasks
+) -> dict:
+    """Telegram sends every message to the bot here (scripts/set_webhook.py sets it up).
+
+    Telegram doesn't say who is behind a chat, so a new chat is asked for the phone number
+    (a button that shares it); the trainee with that number is then reached in this chat
+    (trainees.telegram_chat_id). After that it's the same as on WhatsApp."""
+    if not telegram.verify_secret(settings, request.headers.get(telegram.SECRET_HEADER)):
+        raise HTTPException(status_code=401)
+    msg = telegram.parse_update(await request.json())
+    if msg is None or not msg.private:
+        # Edits and the like, and groups: the bot is a one-to-one chat (docs/PLAN.md).
+        return {"status": "ok"}
+
+    trainee = trainees.find_by_telegram(session, msg.chat_id)
+    # The sender's own number, from the button (Telegram has verified it), not someone else's
+    # contact card.
+    own_number = msg.contact_phone is not None and msg.contact_user_id == msg.user_id
+    linked = False
+    if trainee is None and own_number:
+        trainee = trainees.link_telegram(session, msg.contact_phone, msg.chat_id)
+        linked = trainee is not None
+    stored = Message(channel="telegram", external_id=msg.external_id, direction="in", type=msg.type)
+    if trainee is not None:
+        stored.phone = trainee.phone
+        stored.body = msg.text
+        stored.trainee_id = trainee.id
+        stored.trainer_id = trainee.trainer_id
+    # Otherwise it's someone who isn't a linked trainee: only what dedup needs, not the text.
+    session.add(stored)
+    try:
+        session.commit()
+    except IntegrityError:
+        # Telegram redelivered a message we already stored (the link, if any, is already made).
+        session.rollback()
+        return {"status": "ok"}
+
+    if linked:
+        notice = (TELEGRAM_LINKED, telegram.REMOVE_KEYBOARD)
+    elif trainee is None:
+        # Asked for the number (again), or the number isn't a trainee's (the button stays, to
+        # try again once the trainer has registered it).
+        notice = (UNREGISTERED if own_number else TELEGRAM_ASK_FOR_PHONE, telegram.ASK_FOR_PHONE)
+    elif (msg.text or "").startswith("/start"):
+        # Telegram's "Start" button, e.g. after the trainee cleared the chat.
+        notice = (TELEGRAM_HELP, None)
+    else:
+        notice = None
+        if conversation.mentions_bot(msg.text):
+            background.add_task(reply, stored.id)
+    if notice is not None:
+        trainee_id = trainee.id if trainee is not None else None
+        background.add_task(send_telegram_notice, msg.chat_id, *notice, trainee_id)
+    return {"status": "ok"}
+
+
 APOLOGY = "Przepraszam, mam chwilowy problem. Spróbuj proszę za kilka minut."
 UNREGISTERED = "Ten numer nie jest zarejestrowany – skontaktuj się ze swoim trenerem."
+# Telegram only: the bot learns who someone is when they share their number.
+TELEGRAM_ASK_FOR_PHONE = (
+    "Cześć! Jestem Yanek, asystent Twojego trenera. Żeby zacząć, udostępnij mi swój numer "
+    "telefonu przyciskiem poniżej – sprawdzę, czy trener Cię zarejestrował."
+)
+TELEGRAM_HELP = (
+    "Wysyłaj mi raporty, zaczynając wiadomość od „yanek”, np. „yanek waga 80,5” albo "
+    "„yanek dzień A zrobiony”."
+)
+TELEGRAM_LINKED = "Dzięki, numer się zgadza – możemy zaczynać! " + TELEGRAM_HELP
 
 
 def reply(message_id: int) -> None:
@@ -101,26 +193,30 @@ def reply(message_id: int) -> None:
     try:
         result = assistant.generate_reply(settings, trainee, history, now)
     except assistant.MissingApiKeyError as e:
-        log.error("Can't reply to %s: %s", message.wamid, e)
+        log.error("Can't reply to %s: %s", message.external_id, e)
         result = None
     except Exception:
-        log.exception("LLM call for %s failed", message.wamid)
+        log.exception("LLM call for %s failed", message.external_id)
         result = None
 
     with SessionLocal() as session:
         if conversation.asked_again(session, message):
             log.info(
-                "Not answering %s: the reply to the trainee's next message covers it", message.wamid
+                "Not answering %s: the reply to the trainee's next message covers it",
+                message.external_id,
             )
             return
         text = save_report(session, trainee, message, result, settings.daily_updates_only)
     try:
-        conversation.send_and_store(settings, trainee, text)
+        # Back where the message came from.
+        conversation.send_and_store(settings, trainee, text, message.channel)
     except httpx.HTTPStatusError as e:
         # Meta explains the problem in the response body.
-        log.error("Sending reply to %s failed: %s", message.wamid, e.response.text)
+        log.error("Sending reply to %s failed: %s", message.external_id, e.response.text)
+    except (telegram.TelegramError, conversation.NotOnTelegramError) as e:
+        log.error("Sending reply to %s failed: %s", message.external_id, e)
     except Exception:
-        log.exception("Sending reply to %s failed", message.wamid)
+        log.exception("Sending reply to %s failed", message.external_id)
 
 
 def save_report(
@@ -137,11 +233,11 @@ def save_report(
     try:
         entries.save(session, trainee, message, result, daily_updates_only, now=utcnow())
     except Exception:
-        log.exception("Saving the report from %s failed", message.wamid)
+        log.exception("Saving the report from %s failed", message.external_id)
         return APOLOGY
     for kind, data in (("weight", result.weight), ("training", result.training)):
         if data is not None:
-            log.info("Saved %s from %s: %s", kind, message.wamid, data.model_dump_json())
+            log.info("Saved %s from %s: %s", kind, message.external_id, data.model_dump_json())
     return result.reply
 
 
@@ -156,3 +252,24 @@ def reply_unregistered(msg: whatsapp.InboundMessage) -> None:
         log.error("Sending to %s failed: %s", msg.wamid, e.response.text)
     except Exception:
         log.exception("Sending to %s failed", msg.wamid)
+
+
+def send_telegram_notice(
+    chat_id: int, text: str, keyboard: dict | None, trainee_id: int | None = None
+) -> None:
+    """A fixed text to a Telegram chat (asking for the number, the welcome, the help), with a
+    keyboard (telegram.ASK_FOR_PHONE / REMOVE_KEYBOARD). To a trainee (the welcome, the help)
+    it's stored as chat history, so the model sees what the bot told them; to someone the bot
+    doesn't know, it isn't (like UNREGISTERED on WhatsApp)."""
+    try:
+        external_id = telegram.send_text(get_settings(), chat_id, text, keyboard)
+    except telegram.TelegramError as e:
+        log.error("Sending to Telegram chat %s failed: %s", chat_id, e)
+        return
+    except Exception:
+        log.exception("Sending to Telegram chat %s failed", chat_id)
+        return
+    if trainee_id is not None:
+        with SessionLocal() as session:
+            trainee = session.get_one(Trainee, trainee_id)
+        conversation.store_sent(trainee, "telegram", external_id, text)

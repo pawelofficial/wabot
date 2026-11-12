@@ -15,12 +15,22 @@ class DatabaseSettings(BaseSettings):
 
 
 class Settings(DatabaseSettings):
-    whatsapp_token: str
-    whatsapp_phone_number_id: str
+    # The messenger the bot runs on: which webhook run.sh registers and where messages the bot
+    # starts itself go. Replies always go back where the trainee's message came from, so both
+    # webhooks can be live at once. Only the active channel's settings below need values.
+    channel: Literal["telegram", "whatsapp"] = "telegram"
+
+    # Telegram: the token @BotFather gives when the bot is created. The webhook's secret is
+    # derived from it (telegram.webhook_secret()), so nothing else needs setting up.
+    telegram_bot_token: str = ""
+
+    # WhatsApp (Meta Cloud API).
+    whatsapp_token: str = ""
+    whatsapp_phone_number_id: str = ""
     # App secret (App settings → Basic) used to check Meta's webhook signature.
-    whatsapp_app_secret: str
+    whatsapp_app_secret: str = ""
     # Any string we choose; entered in Meta's webhook configuration.
-    whatsapp_verify_token: str
+    whatsapp_verify_token: str = ""
     graph_api_version: str = "v25.0"
     # Meta app ID (App settings → Basic); scripts/set_webhook.py looks it up if unset.
     whatsapp_app_id: str | None = None
@@ -41,7 +51,8 @@ class Settings(DatabaseSettings):
     daily_updates_only: bool = False
     # Use utils.hardcoded_first_message() instead of the LLM for messages the bot starts.
     hardcoded_first_message: bool = False
-    # Your own number (digits only); where the scripts send test messages.
+    # Your own number (digits only): the trainee scripts/add_trainee.py registers by default and
+    # where the scripts send test messages (on Telegram, once that number has connected).
     whatsapp_test_recipient: str | None = None
 
     # Signs the dashboard's session cookie; any long random string, kept secret. Without it
@@ -53,6 +64,19 @@ class Settings(DatabaseSettings):
     google_client_id: str = ""
     # Local development only: the login page lists the trainers to sign in as, no Google.
     dashboard_dev_login: bool = False
+
+    def missing_for_channel(self) -> list[str]:
+        """The active channel's settings that are empty, as .env names."""
+        if self.channel == "telegram":
+            needed = {"TELEGRAM_BOT_TOKEN": self.telegram_bot_token}
+        else:
+            needed = {
+                "WHATSAPP_TOKEN": self.whatsapp_token,
+                "WHATSAPP_PHONE_NUMBER_ID": self.whatsapp_phone_number_id,
+                "WHATSAPP_APP_SECRET": self.whatsapp_app_secret,
+                "WHATSAPP_VERIFY_TOKEN": self.whatsapp_verify_token,
+            }
+        return [name for name, value in needed.items() if not value]
 
     @model_validator(mode="after")
     def _no_dev_login_in_production(self):

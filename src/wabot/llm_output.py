@@ -25,7 +25,7 @@ MAX_SETS = 20
 MAX_LOAD_KG = 500
 # Reports about older days are probably a misread date.
 MAX_REPORT_AGE = dt.timedelta(days=31)
-# WhatsApp's limit for a text message.
+# The longest text message WhatsApp and Telegram take.
 MAX_REPLY_CHARS = 4096
 
 
@@ -103,7 +103,7 @@ def _foreign_letters(text: str, allowed: str = "") -> str:
     )
 
 
-# Markdown bold (**x**) shows up literally on WhatsApp, which uses *x*.
+# Markdown bold (**x**) shows up literally on WhatsApp and Telegram, which use *x*.
 _MARKDOWN_BOLD = re.compile(r"\*\*(.+?)\*\*")
 
 
@@ -165,10 +165,10 @@ def validate_output(
     if not output.reply.strip():
         errors.append("reply is empty")
     elif output.reply.lstrip().startswith("{"):
-        errors.append("reply must be a WhatsApp message, not JSON")
+        errors.append("reply must be a chat message, not JSON")
     if len(output.reply) > MAX_REPLY_CHARS:
         errors.append(
-            f"reply has {len(output.reply)} characters, WhatsApp allows {MAX_REPLY_CHARS}"
+            f"reply has {len(output.reply)} characters, a chat message allows {MAX_REPLY_CHARS}"
         )
     if foreign := _foreign_letters(output.reply, allowed_letters):
         errors.append(f"reply contains non-Polish letters {foreign!r}; write only in Polish")

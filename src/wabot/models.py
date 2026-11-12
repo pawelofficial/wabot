@@ -2,6 +2,7 @@ import datetime as dt
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -68,7 +69,9 @@ class Trainer(Base):
 
 
 class Trainee(Base):
-    """A trainer's client. The bot finds the trainee behind a message by the phone number."""
+    """A trainer's client. The bot finds the trainee behind a WhatsApp message by the phone
+    number, and behind a Telegram message by the chat, linked once the trainee shares that
+    phone number with the bot (main.receive_telegram())."""
 
     __tablename__ = "trainees"
     __table_args__ = (
@@ -87,8 +90,11 @@ class Trainee(Base):
     # SQLAlchemy expect it to be given rather than generated.
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     trainer_id: Mapped[int] = mapped_column(ForeignKey("trainers.id"), index=True)
-    # WhatsApp's form: digits only, with the country code (48123456789).
+    # Digits only, with the country code (48123456789), as WhatsApp sends it.
     phone: Mapped[str] = mapped_column(String(20), unique=True)
+    # The trainee's private chat with the Telegram bot (the same number as their Telegram user
+    # ID); null until they've shared their phone number with the bot.
+    telegram_chat_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
     name: Mapped[str] = mapped_column(String(100))
     # The trainee's local time decides what "today" and "wczoraj" mean.
     timezone: Mapped[str] = mapped_column(String(50), default=DEFAULT_TIMEZONE)
@@ -119,20 +125,26 @@ class Trainee(Base):
 
 
 class Message(Base):
-    """Every inbound and outbound WhatsApp message.
+    """Every inbound and outbound message, on either channel (Telegram, WhatsApp).
 
-    Serves as chat history and, through the unique wamid, as webhook dedup.
+    Serves as chat history and, through the unique external_id, as webhook dedup.
     """
 
     __tablename__ = "messages"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # WhatsApp message ID; Meta may deliver the same webhook more than once.
-    wamid: Mapped[str | None] = mapped_column(String(128), unique=True)
+    # "telegram" or "whatsapp": where the message came from or was sent to. A reply goes back
+    # on the channel of the message it answers.
+    channel: Mapped[str] = mapped_column(String(10))
+    # The channel's message ID: WhatsApp's wamid, or "tg:<chat id>:<message id>". Webhooks may
+    # deliver the same message more than once.
+    external_id: Mapped[str | None] = mapped_column(String(128), unique=True)
     direction: Mapped[str] = mapped_column(String(3))  # "in" or "out"
-    phone: Mapped[str] = mapped_column(String(20), index=True)  # trainee's wa_id
-    type: Mapped[str] = mapped_column(String(20))  # text, image, template, ...
-    # Null for messages from numbers that aren't registered: only what dedup needs is kept.
+    # The trainee's number (on WhatsApp, the sender's). Null for a Telegram message from someone
+    # who isn't a linked trainee: Telegram doesn't send a number.
+    phone: Mapped[str | None] = mapped_column(String(20), index=True)
+    type: Mapped[str] = mapped_column(String(20))  # text, image, template, contact, ...
+    # Null for messages from people who aren't registered: only what dedup needs is kept.
     body: Mapped[str | None] = mapped_column(Text)
     trainee_id: Mapped[int | None] = mapped_column(ForeignKey("trainees.id"), index=True)
     trainer_id: Mapped[int | None] = mapped_column(ForeignKey("trainers.id"))

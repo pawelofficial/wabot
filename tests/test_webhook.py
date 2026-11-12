@@ -158,8 +158,12 @@ def test_replies_with_the_llm_and_stores_both_messages(client, sent, llm, traine
     assert sent == [("48111222333", "Odpowiedź 1")]
 
     inbound, outbound = stored_messages()
-    assert (inbound.direction, inbound.wamid, inbound.body) == ("in", "wamid.1", "yanek 82,4 rano")
-    assert (outbound.direction, outbound.wamid) == ("out", "wamid.out1")
+    assert (inbound.direction, inbound.external_id, inbound.body) == (
+        "in",
+        "wamid.1",
+        "yanek 82,4 rano",
+    )
+    assert (outbound.direction, outbound.external_id) == ("out", "wamid.out1")
     assert inbound.created_at.tzinfo is not None
     for msg in (inbound, outbound):
         assert (msg.trainee_id, msg.trainer_id) == (trainee.id, trainee.trainer_id)
@@ -230,7 +234,7 @@ def test_unregistered_number_gets_a_fixed_reply_and_its_text_is_not_kept(client,
     assert sent == [(PHONE, main.UNREGISTERED)]
     assert llm == []
     [stored] = stored_messages()
-    assert (stored.wamid, stored.body, stored.trainee_id) == ("wamid.1", None, None)
+    assert (stored.external_id, stored.body, stored.trainee_id) == ("wamid.1", None, None)
 
 
 def test_the_trainees_own_plan_goes_to_the_llm(client, sent, monkeypatch):
@@ -267,7 +271,7 @@ def test_a_correction_is_saved(client, sent, trainee, llm_returns, monkeypatch, 
     post_signed(client, text_payload("wamid.2", "yanek sorki, zanotuj 81kg"))
 
     saved = stored_weights()
-    correction = next(m for m in stored_messages() if m.wamid == "wamid.2")
+    correction = next(m for m in stored_messages() if m.external_id == "wamid.2")
     # The newest row of the day is the current value either way.
     assert (saved[-1].kg, saved[-1].message_id) == (81.0, correction.id)
     # By default the first report is kept too.
@@ -290,7 +294,14 @@ def test_a_message_the_trainee_followed_up_on_is_not_answered(sent, trainee, llm
     # Both arrived before the first reply was ready; the second one's reply covers both.
     with SessionLocal() as session:
         first, second = (
-            Message(direction="in", phone=PHONE, type="text", body=body, trainee_id=trainee.id)
+            Message(
+                channel="whatsapp",
+                direction="in",
+                phone=PHONE,
+                type="text",
+                body=body,
+                trainee_id=trainee.id,
+            )
             for body in ("yanek 80", "yanek sorki, 81")
         )
         session.add_all([first, second])
