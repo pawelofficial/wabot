@@ -24,12 +24,23 @@
     if (dirty) event.preventDefault();
   });
 
+  // A new day's label: the first one no day has yet (A, B, C, ..., then 27, 28, ...), the way
+  // plans.TrainingPlan.labels() labels days by position.
+  const freeLabel = () => {
+    const taken = new Set([...days.querySelectorAll("[data-field=label]")].map((i) => i.value.trim().toLowerCase()));
+    for (let i = 0; ; i++) {
+      const label = i < 26 ? String.fromCharCode(65 + i) : String(i + 1);
+      if (!taken.has(label.toLowerCase())) return label;
+    }
+  };
+
   form.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button || button.type === "submit") return;
 
     if (button.matches("[data-add-day]")) {
       const day = clone("day");
+      day.querySelector("[data-field=label]").value = freeLabel();
       days.appendChild(day);
       day.querySelector("[data-field=name]").focus();
     } else if (button.matches("[data-add-exercise]")) {
@@ -82,6 +93,7 @@
       days: [...days.querySelectorAll(":scope > [data-day]")].map((day) => ({
         // The day's ID, unseen: a renamed or moved day stays the same day ("" for a new one).
         id: day.dataset.dayId,
+        label: value(day.querySelector(".plan-day-head"), "label"),
         name: value(day.querySelector(".plan-day-head"), "name"),
         exercises: [...day.querySelectorAll("[data-exercise]")].map((row) => ({
           id: value(row, "id"),

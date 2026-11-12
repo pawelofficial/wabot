@@ -51,6 +51,7 @@
 {% macro day_card(day) %}
 <section class="card plan-day" data-day data-day-id="{{ day.id }}">
   <div class="plan-day-head">
+    <label class="field day-label-field"><span>Oznaczenie</span><input data-field="label" value="{{ day.label }}" maxlength="3" required title="Krótkie oznaczenie dnia w kalendarzu treningów, np. A, B2, Pn"></label>
     <label class="field grow"><span>Nazwa dnia</span><input data-field="name" value="{{ day.name }}" placeholder="np. Dzień A – nogi" required></label>
     {{ row_actions("dzień") }}
   </div>
@@ -82,7 +83,7 @@
     <label class="field"><span>Notatki do planu</span>
       <textarea data-field="notes" rows="5" placeholder="Cel, dni cardio, uwagi dla podopiecznego…">{{ data.notes }}</textarea>
     </label>
-    <p class="card-subtitle">Yanek zna notatki i ćwiczenia z planu: odpowiada na ich podstawie i po nich rozpoznaje zgłoszone ćwiczenia. Zamienniki to ćwiczenia, które podopieczny może zrobić zamiast danego.</p>
+    <p class="card-subtitle">Yanek zna notatki i ćwiczenia z planu: odpowiada na ich podstawie i po nich rozpoznaje zgłoszone ćwiczenia. Zamienniki to ćwiczenia, które podopieczny może zrobić zamiast danego. Oznaczenie dnia (np. A, B2, Pn) widać w kalendarzu treningów.</p>
   </section>
 
   <div data-days>
@@ -96,7 +97,7 @@
     <span class="muted small">{% if library %}{% if cancel_url != "/dashboard/plans" %}Podopieczni, którzy już mają ten plan, zachowają swoją kopię.{% endif %}{% else %}Wcześniejszy plan zostaje w historii planów; zapisane treningi bez zmian.{% endif %}</span>
   </div>
 
-  <template data-day-template>{{ day_card({"id": "", "name": "", "exercises": [empty_exercise]}) }}</template>
+  <template data-day-template>{{ day_card({"id": "", "label": "", "name": "", "exercises": [empty_exercise]}) }}</template>
   <template data-exercise-template>{{ exercise_row(empty_exercise) }}</template>
   <template data-chip-template>{{ chip("") }}</template>
 </form>

@@ -13,6 +13,7 @@ notes: |
 
 days:
   - name: Trening 1
+    label: "1"
     exercises:
       - id: goblet_squat
         sets: 3
@@ -38,6 +39,7 @@ days:
         reps: 20–30 s
 
   - name: Trening 2
+    label: "2"
     exercises:
       - id: leg_press
         sets: 3

@@ -7,7 +7,9 @@ fields), checks it with TrainingPlan (the same rules as a YAML plan) and turns t
 Polish. With errors, the page is shown again with what the trainer typed.
 
 Each day carries its ID (plans.PlanDay.id) through the form, unseen, so a renamed or moved day
-stays the same day; a day added in the editor has none until the plan is saved.
+stays the same day; a day added in the editor has none until the plan is saved. Every day in the
+form has a label (the calendar's "A"): a plan without them starts with A, B, C by position, and
+a new day gets the next free letter (plan_editor.js), so moving a day keeps its label.
 """
 
 import json
@@ -38,8 +40,12 @@ def exercise_groups() -> list[Group]:
 def form_data(plan: TrainingPlan | None) -> dict:
     """What the editor starts with: the trainee's plan, or one empty day for a new plan."""
     if plan is None:
-        return {"notes": "", "days": [{"id": "", "name": "", "exercises": [_exercise({})]}]}
-    return _clean(plan.model_dump(mode="json"))
+        day = {"id": "", "label": "A", "name": "", "exercises": [_exercise({})]}
+        return {"notes": "", "days": [day]}
+    data = _clean(plan.model_dump(mode="json"))
+    for day, label in zip(data["days"], plan.labels(), strict=True):
+        day["label"] = label
+    return data
 
 
 def parse(text: str) -> tuple[dict, TrainingPlan | None, list[str]]:
@@ -81,6 +87,7 @@ def _clean(raw: dict) -> dict:
         "days": [
             {
                 "id": _text(day.get("id")),
+                "label": _text(day.get("label")),
                 "name": _text(day.get("name")),
                 "exercises": [_exercise(e) for e in _list(day.get("exercises"))],
             }
@@ -97,6 +104,7 @@ def _without_empty(data: dict) -> dict:
         "days": [
             {
                 "id": day["id"] or None,
+                "label": day["label"] or None,
                 "name": day["name"],
                 "exercises": [
                     {key: value for key, value in e.items() if value != ""}
@@ -134,6 +142,10 @@ def _message(error: dict) -> str:
         return "nie udało się rozpoznać dnia, odśwież stronę"
     if kind == "duplicate_day":
         return f"dwa dni mają tę samą nazwę („{context['name']}”)"
+    if kind == "duplicate_label":
+        return f"dwa dni mają to samo oznaczenie („{context['label']}”)"
+    if field == "label":
+        return "oznaczenie dnia może mieć najwyżej 3 znaki"
     if kind == "duplicate_exercise":
         return f"{_exercise_name(context['id'])} jest w tym dniu dwa razy"
     if kind == "own_replacement":

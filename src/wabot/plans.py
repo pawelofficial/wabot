@@ -13,6 +13,9 @@ same when the day is renamed or moved, in later versions of the trainee's plan a
 a library plan. Saved trainings point to their day by it (training_checkins.plan_day_id), so the
 calendar knows that "Dzień A" before a rename and "Poniedziałek – nogi" after it are one day.
 `with_day_ids()` gives the IDs; `to_db()` makes sure no plan is stored without them.
+
+A day's label (`PlanDay.label`: "A", "B2", "Pn") is the short mark the trainer gives it for the
+dashboard's calendar; a day without one is labelled by its position, A, B, C (`labels()`).
 """
 
 import secrets
@@ -43,6 +46,8 @@ def _error(kind: str, message: str, **context) -> PydanticCustomError:
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 # A plan day's ID: made by new_day_id() (8 hex digits); a YAML file may set its own.
 DayId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,32}$")]
+# A plan day's short mark in the calendar's cells: "A", "B2", "Pn".
+Label = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=3)]
 
 
 class PlanExercise(_Strict):
@@ -73,6 +78,7 @@ class PlanExercise(_Strict):
 class PlanDay(_Strict):
     # Null only before the plan is stored (a YAML file, a day just added in the editor).
     id: DayId | None = None
+    label: Label | None = None  # None: the day's letter by position (TrainingPlan.labels())
     name: Name
     exercises: list[PlanExercise] = Field(min_length=1)
 
@@ -104,15 +110,24 @@ class TrainingPlan(_Strict):
         ids = [d.id for d in self.days if d.id is not None]
         if len(set(ids)) != len(ids):
             raise _error("duplicate_day_id", "two days have the same ID")
+        labels = self.labels()
+        keys = [_key(label) for label in labels]
+        twice = next((labels[i] for i, k in enumerate(keys) if keys.count(k) > 1), None)
+        if twice:
+            raise _error("duplicate_label", "two days have the same label: {label}", label=twice)
         return self
 
     def day(self, name: str) -> PlanDay | None:
         return next((d for d in self.days if _key(d.name) == _key(name)), None)
 
+    def labels(self) -> list[str]:
+        """Each day's label, in the plan's order: the trainer's, or A, B, C, ... by position."""
+        return [d.label or _label(i) for i, d in enumerate(self.days)]
+
     def day_labels(self) -> dict[str, str]:
-        """The short label of each day by its ID, for the calendar's cells: A, B, C, ... in the
-        plan's order. (A label the trainer sets comes with the calendar's other plan fields.)"""
-        return {d.id: _label(i) for i, d in enumerate(self.days) if d.id is not None}
+        """The label of each day by its ID, for the calendar's cells."""
+        labels = self.labels()
+        return {d.id: labels[i] for i, d in enumerate(self.days) if d.id is not None}
 
     def without_day_ids(self) -> "TrainingPlan":
         """The same plan with no day IDs: for comparing what the plan says, e.g. with a YAML

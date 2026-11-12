@@ -7,9 +7,10 @@
   <p class="plan-notes">{{ plan.notes }}</p>
 </section>
 {% endif %}
+{% set labels = plan.labels() %}
 {% for day in plan.days %}
 <section class="card">
-  <h2 class="card-title">{{ day.name }}</h2>
+  <h2 class="card-title"><span class="day-label" title="Oznaczenie w kalendarzu treningów">{{ labels[loop.index0] }}</span> {{ day.name }}</h2>
   <p class="card-subtitle">{{ day.exercises|length|pl_count("ćwiczenie", "ćwiczenia", "ćwiczeń") }}</p>
   <div class="table-scroll">
     <table class="table plan-table">

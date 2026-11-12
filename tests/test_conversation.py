@@ -237,6 +237,16 @@ def test_the_whole_catalog_is_not_in_the_instructions():
             },
             "same name",
         ),
+        ({"days": [{"name": "A", "label": "Dzień", "exercises": [{"id": "plank"}]}]}, "at most 3"),
+        (
+            {
+                "days": [
+                    {"name": "Push", "label": "b", "exercises": [{"id": "plank"}]},
+                    {"name": "Pull", "exercises": [{"id": "plank"}]},  # B by its position
+                ]
+            },
+            "same label: b",
+        ),
     ],
 )
 def test_bad_plans_are_rejected(plan, error):
@@ -250,6 +260,24 @@ def test_instructions_without_a_plan_say_so():
     assert assistant.PROMPTS["no_training_plan"] in instructions
     assert "<plan_treningowy>" not in instructions
     assert instructions.endswith("TASK")
+
+
+def test_a_day_without_a_label_is_labelled_by_its_position():
+    day = {"exercises": [{"id": "plank"}]}
+    plan = plans.TrainingPlan.model_validate(
+        {
+            "days": [
+                {"name": "Push", "label": " P ", **day},
+                {"name": "Pull", **day},
+                {"name": "Nogi", "label": "N2", **day},
+            ]
+        }
+    )
+    assert plan.labels() == ["P", "B", "N2"]
+    plan = plans.with_day_ids(plan)
+    assert list(plan.day_labels().values()) == ["P", "B", "N2"]
+    # Stored without a label when the day has none, as before labels.
+    assert [("label" in d) for d in plans.to_db(plan)["days"]] == [True, False, True]
 
 
 def test_example_training_plan_is_valid():

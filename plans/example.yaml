@@ -2,6 +2,8 @@
 # src/wabot/exercises.yaml; the bot shows the trainee its Polish name. `replacements` are the
 # exercises the trainee may do instead (also catalog IDs). sets, reps, weight and note are
 # optional; reps and weight are free text ("6–8", "45 s", "2 x 16 kg", "lekko").
+# `label` is the day's short mark in the dashboard's calendar (up to 3 characters, optional:
+# without it the days are A, B, C by position).
 # Register it with: uv run python scripts/add_trainee.py --plan plans/example.yaml
 
 notes: |
@@ -17,6 +19,7 @@ notes: |
 
 days:
   - name: Dzień A – poniedziałek (dół ciała)
+    label: A
     exercises:
       - id: back_squat
         sets: 4
@@ -44,6 +47,7 @@ days:
         reps: 45 s
 
   - name: Dzień B – środa (góra ciała)
+    label: B
     exercises:
       - id: incline_dumbbell_press
         sets: 4
@@ -70,6 +74,7 @@ days:
         weight: lekko
 
   - name: Dzień C – piątek (całe ciało)
+    label: C
     exercises:
       - id: deadlift
         sets: 3

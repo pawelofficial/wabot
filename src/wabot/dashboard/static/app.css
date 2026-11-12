@@ -237,6 +237,13 @@ body.login { align-items: center; justify-content: center; padding: 16px; }
 .plan-day-head { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 12px; }
 .grow { flex: 1; }
 .plan-day-head input { font-size: 16px; font-weight: 600; }
+.day-label-field { flex: 0 0 auto; }
+.day-label-field input { width: 6ch; text-align: center; }
+/* A plan day's label (the calendar's "A") before its name on the plan's cards. */
+.day-label {
+  display: inline-block; min-width: 1.6em; margin-right: 6px; padding: 0 5px; border: 1px solid var(--border);
+  border-radius: 6px; text-align: center; font-size: 14px;
+}
 .plan-exercises { list-style: none; margin: 0 0 12px; padding: 0; counter-reset: exercise; }
 .plan-exercise {
   position: relative; counter-increment: exercise;
@@ -310,14 +317,14 @@ a.chip:hover { border-color: var(--accent); }
 :root {
   --done: #1f7a5c; --done-soft: #e3f2ec;
   --partial: #b7791f; --partial-soft: #fcf0d4;
-  --skipped: #b42318; --skipped-soft: #eef0f3;
+  --skipped: #b42318; --skipped-soft: #fbe0dd;
   --outside: #5b4bc4; --outside-soft: #ebe8fb;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --done: #5cc49d; --done-soft: #1d3a30;
     --partial: #f0b44c; --partial-soft: #3a2f14;
-    --skipped: #f97066; --skipped-soft: #262c35;
+    --skipped: #f97066; --skipped-soft: #4a1f1c;
     --outside: #a597f5; --outside-soft: #29254a;
   }
 }
@@ -353,7 +360,7 @@ a.cal-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px
 .mark.done .mark-symbol { color: var(--done); }
 .mark.partial { background: var(--partial-soft); border-color: var(--partial); }
 .mark.skipped { background: var(--skipped-soft); border-color: var(--skipped); border-style: dashed; }
-.mark.skipped .mark-symbol { color: var(--skipped); }
+.mark.skipped .mark-symbol, .mark.skipped .mark-label { color: var(--skipped); }
 .mark.outside { background: var(--outside-soft); border-color: var(--outside); min-width: 24px; }
 .mark.outside .mark-label { color: var(--outside); }
 .legend {

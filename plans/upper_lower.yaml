@@ -14,6 +14,7 @@ notes: |
 
 days:
   - name: Poniedziałek – góra 1
+    label: Pn
     exercises:
       - id: bench_press
         sets: 4
@@ -41,6 +42,7 @@ days:
         weight: 30 kg
 
   - name: Wtorek – dół 1
+    label: Wt
     exercises:
       - id: back_squat
         sets: 4
@@ -61,6 +63,7 @@ days:
         reps: 15
 
   - name: Czwartek – góra 2
+    label: Cz
     exercises:
       - id: incline_dumbbell_press
         sets: 4
@@ -90,6 +93,7 @@ days:
         weight: 2 x 8 kg
 
   - name: Piątek – dół 2
+    label: Pt
     exercises:
       - id: deadlift
         sets: 3
