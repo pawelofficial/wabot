@@ -37,6 +37,11 @@ class Settings(DatabaseSettings):
 
     openai_api_key: str = ""
     openai_model: str = "gpt-5.6-luna"
+    # Voice messages are turned into text by this OpenAI model (voice.py) before anything else
+    # reads them; longer ones than voice_max_seconds get a fixed reply instead (cost, and a
+    # report is a few sentences).
+    openai_transcribe_model: str = "gpt-4o-mini-transcribe"
+    voice_max_seconds: int = 300
     # What chat history a reply call gets. "marked": the whole recent history, with a marker
     # before the first message still waiting (not yet handled by a reply, conversation.Turn); the
     # LLM extracts only what's below it. "new_only": only the messages from the first waiting one

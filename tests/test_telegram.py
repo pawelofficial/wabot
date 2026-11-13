@@ -468,3 +468,140 @@ def test_text_telegram_cant_format_goes_out_as_it_is(monkeypatch):
     requests = fake_post(monkeypatch, respond)
     assert telegram.send_text(Settings(), 42, "Przysiad 4 x 8_10", markdown=True) == "tg:42:8"
     assert [payload.get("parse_mode") for _, payload in requests] == ["Markdown", None]
+
+
+# Voice messages
+
+
+def voice_update(message_id: int, duration: int = 4, **fields) -> dict:
+    voice = {"file_id": f"voice-{message_id}", "duration": duration}
+    return update(message_id, voice=voice, **fields)
+
+
+@pytest.fixture
+def heard(monkeypatch) -> list:
+    """Downloading and transcribing replaced: every recording says "waga 82". Records the
+    file IDs downloaded."""
+    downloads = []
+
+    def download(settings, file_id):
+        downloads.append(file_id)
+        return b"OggS..."
+
+    monkeypatch.setattr(telegram, "download_file", download)
+    monkeypatch.setattr(main.voice, "transcribe", lambda settings, audio: "waga 82")
+    return downloads
+
+
+def test_a_voice_message_is_transcribed_and_answered(client, telegram_sent, llm, heard):
+    # No "yanek" needed: a voice message is sent to the bot.
+    connect(client, add_trainee())
+    post(client, voice_update(2))
+    voice_message = stored_messages()[-2]  # the last one is the reply
+    assert (voice_message.type, voice_message.body) == ("voice", "waga 82")
+    assert voice_message.handled_at is not None
+    assert heard == ["voice-2"]
+    assert llm[0][-1] == "waga 82"
+    assert telegram_sent[-1].text == "Zapisałem 82 kg."
+
+
+def test_a_voice_messages_caption_comes_before_the_transcript(client, telegram_sent, llm, heard):
+    connect(client, add_trainee())
+    post(client, voice_update(2, caption="rano"))
+    assert stored_messages()[-2].body == "rano waga 82"
+
+
+def test_a_voice_message_too_long_isnt_transcribed(client, telegram_sent, llm, heard):
+    connect(client, add_trainee())
+    post(client, voice_update(2, duration=Settings().voice_max_seconds + 1))
+    assert heard == [] and llm == []
+    assert telegram_sent[-1].text == main.VOICE_NOT_UNDERSTOOD
+    voice_message = stored_messages()[-2]
+    assert (voice_message.body, voice_message.handled_at is not None) == (None, True)
+
+
+@pytest.mark.parametrize("failure", ["download", "transcription", "silence"])
+def test_a_voice_message_that_cant_be_transcribed_gets_a_fixed_reply(
+    client, telegram_sent, llm, monkeypatch, failure
+):
+    def download(settings, file_id):
+        if failure == "download":
+            raise telegram.TelegramError("getFile: 400 Bad Request: file is too big")
+        return b"OggS..."
+
+    def transcribe(settings, audio):
+        if failure == "transcription":
+            raise RuntimeError("OpenAI is down")
+        return ""
+
+    monkeypatch.setattr(telegram, "download_file", download)
+    monkeypatch.setattr(main.voice, "transcribe", transcribe)
+    connect(client, add_trainee())
+    post(client, voice_update(2))
+    assert llm == []
+    assert telegram_sent[-1].text == main.VOICE_NOT_UNDERSTOOD
+    # Handled: the next "yanek" doesn't read an empty message as new.
+    assert stored_messages()[-2].handled_at is not None
+
+
+def test_a_redelivered_voice_message_is_transcribed_once(client, telegram_sent, llm, heard):
+    connect(client, add_trainee())
+    post(client, voice_update(2))
+    post(client, voice_update(2))
+    assert heard == ["voice-2"] and len(llm) == 1
+
+
+def test_a_voice_message_from_someone_unknown_isnt_transcribed(client, telegram_sent, heard):
+    post(client, voice_update(2))
+    assert heard == []
+    assert telegram_sent[-1].text == main.TELEGRAM_ASK_FOR_PHONE
+
+
+def test_a_voice_message_after_a_report_answers_both(client, telegram_sent, llm, heard):
+    # "rano 81" is waiting; the voice message calls the bot, and its reply reads both.
+    connect(client, add_trainee())
+    post(client, update(2, "rano 81"))
+    post(client, voice_update(3))
+    assert llm == [[None, main.TELEGRAM_LINKED, "rano 81", "waga 82"]]
+
+
+def test_parsing_a_voice_message():
+    msg = telegram.parse_update(voice_update(7, duration=12))
+    assert (msg.type, msg.voice_file_id, msg.voice_duration) == ("voice", "voice-7", 12)
+
+
+def file_found(monkeypatch) -> None:
+    """getFile answers with the file's path."""
+    found = {"ok": True, "result": {"file_path": "voice/file_1.oga"}}
+    fake_post(monkeypatch, lambda url, payload: httpx.Response(200, json=found))
+
+
+@pytest.mark.parametrize("kind", ["refused", "unreachable", "not found"])
+def test_downloading_a_file_never_shows_the_token(monkeypatch, kind):
+    file_found(monkeypatch)
+    urls = []
+
+    def get(url, timeout=None):
+        urls.append(url)
+        if kind == "not found":
+            return httpx.Response(404)
+        return failure(kind)(url, None)
+
+    monkeypatch.setattr(telegram.httpx, "get", get)
+    with pytest.raises(telegram.TelegramError) as error:
+        telegram.download_file(Settings(), "voice-7")
+    assert urls == [f"https://api.telegram.org/file/bot{TOKEN}/voice/file_1.oga"]
+    assert TOKEN not in "".join(traceback.format_exception(error.value))
+
+
+def test_downloading_a_file(monkeypatch):
+    file_found(monkeypatch)
+    monkeypatch.setattr(
+        telegram.httpx, "get", lambda url, timeout=None: httpx.Response(200, content=b"OggS")
+    )
+    assert telegram.download_file(Settings(), "voice-7") == b"OggS"
+
+
+def test_the_llm_is_told_a_voice_message_is_a_transcript():
+    [turn] = assistant.to_llm_messages([Message(direction="in", type="voice", body="waga 82")])
+    assert turn["content"] == "[wiadomość głosowa, transkrypcja] waga 82"

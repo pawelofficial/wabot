@@ -35,6 +35,9 @@ def to_llm_messages(history: list[Message]) -> list[dict]:
         # A photo (or other non-text message) shows as its type, with its caption if it has one.
         if msg.type == "text" and msg.body:
             text = msg.body
+        elif msg.type == "voice" and msg.body:
+            # The transcript (voice.py): the model knows a misheard number is possible.
+            text = f"[wiadomość głosowa, transkrypcja] {msg.body}"
         else:
             text = " ".join(filter(None, [f"[wiadomość typu {msg.type}]", msg.body]))
         if msg.direction == "in":

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -6,10 +7,21 @@ from typing import Annotated
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from wabot import assistant, conversation, entries, logs, plans, telegram, trainees, whatsapp
+from wabot import (
+    assistant,
+    conversation,
+    entries,
+    logs,
+    plans,
+    telegram,
+    trainees,
+    voice,
+    whatsapp,
+)
 from wabot.config import Settings, get_settings
 from wabot.dashboard import routes as dashboard
 from wabot.db import SessionLocal, get_session
@@ -170,9 +182,25 @@ async def receive_telegram(
         notice = (TELEGRAM_HELP, None)
     else:
         notice = None
+    text = msg.text
+    if trainee is not None and notice is None and msg.voice_file_id is not None:
+        # A voice message: its text is the transcript (with the caption, if it has one), and from
+        # here on it's read like a typed message. Transcribed before storing, so no reply sees it
+        # without its text; a redelivery isn't transcribed (paid) a second time.
+        if session.scalar(select(Message.id).where(Message.external_id == msg.external_id)):
+            log.info("Telegram message %s: already stored (redelivered)", msg.external_id)
+            return {"status": "ok"}
+        transcript = await asyncio.to_thread(
+            voice.text_of, settings, msg.external_id, msg.voice_file_id, msg.voice_duration
+        )
+        if transcript is None:
+            notice = (VOICE_NOT_UNDERSTOOD, None)
+        else:
+            text = " ".join(filter(None, [msg.text, transcript]))
+            stored.body = text
     if trainee is not None and notice is not None:
-        # The shared number or /start: answered by the fixed text, not a report, so the next
-        # reply doesn't read it as a new message.
+        # The shared number, /start or an untranscribed voice message: answered by the fixed
+        # text, not a report, so the next reply doesn't read it as a new message.
         stored.handled_at = utcnow()
 
     session.add(stored)
@@ -183,9 +211,9 @@ async def receive_telegram(
         session.rollback()
         log.info("Telegram message %s: already stored (redelivered)", msg.external_id)
         return {"status": "ok"}
-    log_inbound("Telegram", stored, trainee, msg.text)
+    log_inbound("Telegram", stored, trainee, text)
 
-    if notice is None and conversation.mentions_bot(msg.text):
+    if notice is None and conversation.calls_bot(msg.type, text):
         background.add_task(reply, stored.id)
     if notice is not None:
         trainee_id = trainee.id if trainee is not None else None
@@ -200,7 +228,7 @@ def log_inbound(channel: str, stored: Message, trainee: Trainee | None, text: st
         return
     if stored.handled_at is not None:
         what = ": answered with a fixed text"
-    elif conversation.mentions_bot(text):
+    elif conversation.calls_bot(stored.type, text):
         what = ""
     else:
         what = ": not addressed to the bot, waits for the next yanek"
@@ -232,6 +260,11 @@ TELEGRAM_HELP = (
     "„yanek dzień A zrobiony”."
 )
 TELEGRAM_LINKED = "Dzięki, numer się zgadza – możemy zaczynać! " + TELEGRAM_HELP
+# A voice message that couldn't be turned into text (too long, nothing recognised, a failure).
+VOICE_NOT_UNDERSTOOD = (
+    "Nie udało mi się odsłuchać tej wiadomości głosowej – nagraj ją jeszcze raz (do 5 minut) "
+    "albo napisz raport, zaczynając od „yanek”."
+)
 
 
 # How many times reply() reads the messages again when another reply took some of them while this

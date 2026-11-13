@@ -186,7 +186,8 @@ or a correction of something saved days ago:
 > **Kasia:** *(photo of the scale)* yanek 80,4
 
 - **Built:** a caption is the message's text, so this is case 1.
-- **Planned:** a voice message from a trainee, or a photo without a caption that follows a "yanek" in the last few minutes, gets a fixed reply ("Na razie czytam tylko tekst – napisz proszę raport.") and is handled. Voice messages get it even without "yanek", since they can't contain it as text.
+- **Built (2026-11-13), voice on Telegram:** a voice message is transcribed (OpenAI, `voice.py`) before it's stored, and the transcript is its text, so it's case 1 from there on. It needs no "yanek": it's sent to the bot only, and nobody says the name into one. One that can't be transcribed (longer than 5 minutes, nothing recognised, a failure) gets a fixed reply (`VOICE_NOT_UNDERSTOOD`: record it again or write it) and is handled. WhatsApp's voice messages (type `audio`) are only stored, as before.
+- **Planned:** a photo without a caption that follows a "yanek" in the last few minutes gets a fixed reply ("Na razie czytam tylko tekst – napisz proszę raport.") and is handled.
 
 ### 12. A retry after a failure
 
@@ -222,7 +223,7 @@ or a correction of something saved days ago:
 | 5 | Saved entries in the turn, corrections by ID | 3 | milestone 4 |
 | 6 | `intent` in the answer, logged | all | with 3 |
 | 7 | The fast path | 1 | any time |
-| 8 | Fixed reply for voice and captionless photos | 11 | any time |
+| 8 | Voice transcription (✅ 2026-11-13, Telegram); fixed reply for captionless photos | 11 | any time |
 | 9 | Diet entries | 9 | milestone 4 |
 
 ## Decisions to make
@@ -231,4 +232,4 @@ or a correction of something saved days ago:
 2. **Answers without "yanek" (case 5):** after a bot's question, the next message within **2 hours** is answered without "yanek"? Another window?
 3. **The fast path (case 1):** only as a fallback (as proposed), or also in front of the LLM for the simplest reports (cheaper, but the reply is always the fixed text)?
 4. **Corrections (case 3):** how far back: the last **7 days**?
-5. **Voice messages (case 11):** the fixed reply, or transcription later (one more OpenAI call per voice message)?
+5. ~~**Voice messages (case 11):** the fixed reply, or transcription later?~~ Decided 2026-11-13: transcription, a separate call before the reply (the text is needed for the history, the dashboard and corrections).

@@ -19,6 +19,7 @@ from wabot.config import Settings
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 API = "https://api.telegram.org/bot{token}/{method}"
+FILE_URL = "https://api.telegram.org/file/bot{token}/{path}"
 SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
 # A keyboard with one button that sends the trainee's own number (the only way a bot can learn
@@ -63,6 +64,9 @@ class InboundMessage:
     # they pressed the "Udostępnij numer telefonu" button).
     contact_phone: str | None = None
     contact_user_id: int | None = None
+    # A voice message: its file (download_file()) and length in seconds.
+    voice_file_id: str | None = None
+    voice_duration: int | None = None
 
 
 def message_id(chat_id: int, telegram_message_id: int) -> str:
@@ -96,6 +100,7 @@ def parse_update(update: dict) -> InboundMessage | None:
     chat = msg["chat"]
     kind = next((t for t in TYPES if t in msg), "other")
     contact = msg.get("contact") or {}
+    voice = msg.get("voice") or {}
     return InboundMessage(
         external_id=message_id(chat["id"], msg["message_id"]),
         chat_id=chat["id"],
@@ -106,6 +111,8 @@ def parse_update(update: dict) -> InboundMessage | None:
         text=msg.get("text") if kind == "text" else msg.get("caption"),
         contact_phone=contact.get("phone_number"),
         contact_user_id=contact.get("user_id"),
+        voice_file_id=voice.get("file_id"),
+        voice_duration=voice.get("duration"),
     )
 
 
@@ -148,6 +155,20 @@ def send_text(
                 raise
     sent = _call(settings, "sendMessage", payload)
     return message_id(chat_id, sent["message_id"])
+
+
+def download_file(settings: Settings, file_id: str) -> bytes:
+    """A file someone sent the bot (a voice message, ...), by its file_id. Bots can download
+    files up to 20 MB. Raises TelegramError (never with the URL: it has the token)."""
+    path = _call(settings, "getFile", {"file_id": file_id})["file_path"]
+    url = FILE_URL.format(token=settings.telegram_bot_token, path=path)
+    try:
+        response = httpx.get(url, timeout=30)
+    except httpx.HTTPError as e:
+        raise TelegramError(f"download: {type(e).__name__}") from None
+    if response.status_code != 200:
+        raise TelegramError(f"download: HTTP {response.status_code}")
+    return response.content
 
 
 def set_webhook(settings: Settings, url: str) -> None:

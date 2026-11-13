@@ -43,6 +43,7 @@ Because consent is collected on paper, **the trainer registers each trainee in t
 | Correction | "sorry, 81,4 nie 18,4" | Correct the trainee's most recent matching entry |
 | Off-topic / advice | "mogę brać kreatynę?" | Redirect to the trainer; no medical or nutrition advice of its own |
 | Reply to a reminder | Reminder: "Jak dziś z dietą?" → "dobrze, bez odstępstw" | Interpreted in context of the reminder (it's part of the chat history) |
+| Voice message | "waga 82, nogi zrobione" said into Telegram | Built 2026-11-13: transcribed by OpenAI (`gpt-4o-mini-transcribe`, Polish) before it's stored; the transcript is the message's text, so it's handled like a typed message, without "yanek". Up to 5 minutes; otherwise, or if it fails, a fixed reply. The audio isn't kept; it goes to OpenAI for the transcription (to mention in the consent). Telegram only for now |
 | Photo | progress or meal photo | After the MVP: stored in Cloud Storage and shown on the dashboard. In the MVP: a fixed reply that photos aren't supported yet (not built); any caption is processed like a normal message (built 2026-11-13: the caption is the message's text, so "yanek 80,4" under a photo of the scale works) |
 
 ## The LLM's role

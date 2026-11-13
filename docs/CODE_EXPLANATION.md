@@ -132,13 +132,22 @@ Telegram ──POST /telegram/webhook──► main.receive_telegram()
   ├─ telegram.verify_secret(settings, X-Telegram-Bot-Api-Secret-Token)    wrong / no token → 401
   │     the secret is telegram.webhook_secret(): an HMAC of the bot token, given to Telegram by setWebhook
   ├─ telegram.parse_update(update) → InboundMessage(external_id "tg:<chat>:<id>", chat_id, user_id,
-  │                                                 private, type, text, contact_phone, contact_user_id)
+  │                                                 private, type, text, contact_phone, contact_user_id,
+  │                                                 voice_file_id, voice_duration)
   │     text: a text message's text, or a photo's (video's, ...) caption
   │     not a message (an edit, ...) or not a private chat (a group) → 200, nothing else
   ├─ trainees.find_by_telegram(chat_id)              → Trainee or None
   ├─ None, and the message is the sender's own number (contact.user_id == from.id):
   │     trainees.link_telegram(phone, chat_id)  normalize the number, find the trainee by it,
   │                                             trainee.telegram_chat_id = chat_id
+  ├─ a trainee's voice message: transcribed before it's stored (below)
+  │     external_id already stored (redelivered) → 200, not transcribed again
+  │     voice.text_of(settings, external_id, file_id, duration)   in a thread (asyncio.to_thread)
+  │       longer than VOICE_MAX_SECONDS (300) → None
+  │       telegram.download_file(file_id)   getFile, then api.telegram.org/file/bot<token>/<path>
+  │       voice.transcribe(audio)           OpenAI OPENAI_TRANSCRIBE_MODEL, language "pl"
+  │       a failure or nothing recognised → None (logged)
+  │     text → the message's text (after the caption, if any); None → VOICE_NOT_UNDERSTOOD below
   ├─ INSERT Message(channel="telegram", external_id, ...)
   │     a (now) known trainee: with body, phone, trainee_id, trainer_id
   │     anyone else:           only what dedup needs
@@ -149,10 +158,12 @@ Telegram ──POST /telegram/webhook──► main.receive_telegram()
         unknown, anything else (/start, text, someone else's contact card)
                             → send_telegram_notice(TELEGRAM_ASK_FOR_PHONE, ASK_FOR_PHONE)       not stored
         trainee, "/start"   → send_telegram_notice(TELEGRAM_HELP, trainee)                     stored
-        trainee, "yanek"    → main.reply(message.id)   the same as in Flow 1; the reply goes to Telegram
+        trainee, voice message not transcribed → send_telegram_notice(VOICE_NOT_UNDERSTOOD, trainee)  stored
+        trainee, "yanek" or a transcribed voice message (conversation.calls_bot())
+                            → main.reply(message.id)   the same as in Flow 1; the reply goes to Telegram
         trainee, otherwise  → nothing; the message waits for the next "yanek"
-  the shared number and "/start" of a trainee are stored handled (answered by the fixed text, not
-  reports), so the next reply reads them as context
+  the shared number, "/start" and a voice message that wasn't transcribed are stored handled
+  (answered by the fixed text, not reports), so the next reply reads them as context
 ```
 
 - **`ASK_FOR_PHONE`** is a keyboard with one button, "Udostępnij numer telefonu" (`request_contact`). Pressing it sends the trainee's own number, which Telegram has verified; a contact card from the address book has another `user_id` and connects nobody.
@@ -160,6 +171,7 @@ Telegram ──POST /telegram/webhook──► main.receive_telegram()
 - **What the bot told a trainee is history**: the welcome and the help are stored as bot messages, so the model sees "[wiadomość typu contact]" followed by the welcome, then the reports. Texts to strangers aren't stored, like `UNREGISTERED` on WhatsApp.
 - **Formatting**: the model writes WhatsApp's `*bold*` / `_italic_` (the prompt asks for chat formatting), which is Telegram's legacy Markdown too, so replies go with `parse_mode=Markdown`. If Telegram can't parse it (a stray `*` or `_`), `telegram.send_text()` sends the text as it is.
 - **The bot token is in every API URL** (`api.telegram.org/bot<token>/sendMessage`). `telegram._call()` raises `TelegramError` with Telegram's own description and hides httpx's exception (which carries the URL); httpx's request logging is off. A failed send is logged as e.g. `sendMessage: 403 Forbidden: bot was blocked by the user`.
+- **Voice messages** need no "yanek": they're sent to the bot only, and nobody says the name into one. Telegram doesn't transcribe for bots (only Premium users, in the app), so `voice.py` downloads the recording and OpenAI transcribes it; the transcript is the stored text, so from then on a voice message is read exactly like a typed one (history, the dashboard, corrections). `called_again()` counts a later voice message as calling the bot too. The model sees it as "[wiadomość głosowa, transkrypcja] …". It's transcribed in the webhook, before storing, so no reply ever reads a voice message without its text; that makes the webhook take a few seconds for a voice message. The audio isn't kept.
 - **One history across channels**: `recent_history()` reads the trainee's messages whatever their channel, so a trainee who moves from WhatsApp to Telegram keeps the context.
 
 ## Flow 2: the LLM call
@@ -181,7 +193,8 @@ generate_reply()
   │     HISTORY_MODE=new_only:          new only (the code drops the context)
   │     no context (nothing handled in the window): everything is new, no marker
   │   to_llm_messages() turns stored messages into [{"role": "user"|"assistant", "content"}]:
-  │     "in" → user, "out" → assistant; non-text → "[wiadomość typu image]", with its
+  │     "in" → user, "out" → assistant; a voice message → "[wiadomość głosowa, transkrypcja]"
+  │     + the transcript; other non-text → "[wiadomość typu image]", with its
   │     caption after it if it has one ("[wiadomość typu photo] yanek 80,4");
   │     bot messages before the trainee's first one (a reminder, a message the bot started)
   │     become one developer note first ("Wcześniej … napisałeś do podopiecznego:" + the
@@ -507,7 +520,7 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 `uv run pytest`. `tests/conftest.py` points the app at a temporary SQLite db (tables recreated for every test) and sets fake tokens and keys as environment variables. It turns `.env` off for tests, so they don't depend on your local settings: only those values and the code's defaults apply. No test calls WhatsApp or OpenAI.
 
 - `test_logs.py`: the log file rotating (and keeping only `BACKUPS` old files), the level filtering, DEBUG not turning on httpx (the token), setup twice not doubling lines, the app writing `logs/wabot.log` by default. Other tests write no file (`LOG_FILE=""` in `conftest.py`).
-- `test_telegram.py`: Flow 1b: the secret (refused without it, or without a bot token), a new chat asked for the number, the own number connecting the trainee (with a "+"), someone else's contact card and an unregistered number connecting nobody, a new Telegram account taking over, `/start` again, redelivery, groups and edits ignored, a photo stored without text, a photo's caption answered like a text, `/start` and the shared number not hiding a waiting report, one history across WhatsApp and Telegram with each reply going back where its message came from, a failed send logged; the client: the request it sends, errors never showing the token (also in the traceback), httpx's logging off, the formatting fallback, the derived secret, parsing; `missing_for_channel()`, `scripts/set_webhook.py` on Telegram, WhatsApp refusing everything without its secrets. `tests/conftest.py` makes any Telegram API call in a test fail (`no_telegram`).
+- `test_telegram.py`: Flow 1b: the secret (refused without it, or without a bot token), a new chat asked for the number, the own number connecting the trainee (with a "+"), someone else's contact card and an unregistered number connecting nobody, a new Telegram account taking over, `/start` again, redelivery, groups and edits ignored, a photo stored without text, a photo's caption answered like a text, voice messages (transcribed and answered without "yanek", the caption first, too long or failed or silent → the fixed reply and handled, a redelivery transcribed once, a stranger's not transcribed, answering a waiting report with it, parsing, downloading never showing the token, how the model sees it), `/start` and the shared number not hiding a waiting report, one history across WhatsApp and Telegram with each reply going back where its message came from, a failed send logged; the client: the request it sends, errors never showing the token (also in the traceback), httpx's logging off, the formatting fallback, the derived secret, parsing; `missing_for_channel()`, `scripts/set_webhook.py` on Telegram, WhatsApp refusing everything without its secrets. `tests/conftest.py` makes any Telegram API call in a test fail (`no_telegram`).
 - `test_webhook.py`: Flow 1 through FastAPI's test client, with the LLM and `send_text` replaced by fakes: replies, dedup, unregistered numbers, saving, corrections, a failed save (the message keeps waiting), a stored plan that no longer validates (the apology), an image's caption as its text, a message followed up on (no LLM call for it); what "handled" fixes: after a failed send the report isn't saved again, after an apology it's read again, messages another reply took meanwhile are read again. Its `add_trainee()` helper is used by the other test files.
 - `test_entries.py`: Flow 2b: one entry per day, corrections, out-of-order saves, exercises replaced, a check-in's plan version (the new one after a plan change, none without a plan), the database refusing another trainee's version, trainings before and after a day is renamed having the same day ID; the two kinds of training (what counts as outside the plan; a run on a plan day is a second training and its correction changes only the run; another plan day on the same date, or the day after "który to był dzień?", is a correction), in both `DAILY_UPDATES_ONLY` modes.
 - `test_conversation.py`: the name trigger, history per trainee, `called_again()`, the turn (new from the first waiting message, a reminder before it as context), the marker between context and new, plan injection and the plan text, bad plans, the example plan, `exercises.lookup()`, the trainee's local date, `scripts/add_trainee.py`.

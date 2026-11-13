@@ -27,6 +27,12 @@ def mentions_bot(text: str | None) -> bool:
     return text is not None and BOT_NAME.search(text) is not None
 
 
+def calls_bot(type_: str, text: str | None) -> bool:
+    """Whether a trainee's message asks the bot for an answer: it mentions the bot by name, or
+    it's a voice message (sent to the bot only; nobody says "yanek" into it)."""
+    return type_ == "voice" or mentions_bot(text)
+
+
 def recent_history(session: Session, trainee_id: int, now: datetime) -> list[Message]:
     """The trainee's last messages within the history window, oldest first."""
     newest_first = session.scalars(
@@ -76,14 +82,15 @@ def called_again(session: Session, message: Message) -> bool:
     later message reads this one too (it's still waiting), so this one gets no reply of its own:
     answering both would send two replies, possibly out of order ("zanotowałem 80" arriving
     after "zanotowałem 81")."""
-    later = session.scalars(
-        select(Message.body).where(
+    later = session.execute(
+        select(Message.type, Message.body).where(
             Message.trainee_id == message.trainee_id,
             Message.direction == "in",
+            Message.handled_at.is_(None),
             Message.id > message.id,
         )
     )
-    return any(mentions_bot(body) for body in later)
+    return any(calls_bot(type_, body) for type_, body in later)
 
 
 def not_answered_because(session: Session, message: Message) -> str | None:
