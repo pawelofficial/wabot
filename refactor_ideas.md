@@ -15,7 +15,7 @@ Priorities:
 
 | # | Problem | Priority |
 |---|---|---|
-| 1.1 | "Already handled" is guessed from the bot's last message: a failed send duplicates a report, an apology loses one, and on Telegram so does a `/start` in between – verified | P1 |
+| 1.1 | "Already handled" is guessed from the bot's last message: a failed send duplicates a report, an apology loses one, and on Telegram so does a `/start` in between – verified | ✅ fixed (2026-11-13) |
 | 1.2 | One reply saves at most one weight and one training: "sobota A, niedziela B" keeps one of them | P2 (milestone 4) |
 | 1.3 | Photos and voice messages get no answer, and "yanek 80,4" as a photo caption is dropped – verified | P2; captions ✅ fixed |
 | 1.4 | A stored plan that no longer validates: no reply at all, not even the apology (came in with the logging change) – verified | ✅ fixed |
@@ -28,7 +28,11 @@ Priorities:
 
 ## 1. The bot's conversation flow
 
-### 1.1 "Already handled" is guessed from the bot's last message (verified, P1) – still open (2026-11-04: 1.2)
+### 1.1 "Already handled" is guessed from the bot's last message (verified, P1) – ✅ fixed (2026-11-13)
+
+**Built:** `messages.handled_at` (migration 0011, older messages marked by the old rule) and `conversation.Turn`: a reply reads the messages still waiting as new and marks them handled in the save's transaction. A failed LLM call or save leaves them waiting, a failed send leaves them handled, `/start` and the shared number are handled at once. Each failure mode below has a test (`test_webhook.py`, `test_telegram.py`). The design and what's left for milestone 4 are in PLAN.md, "How a reply reads the conversation". Still open from the fix below: storing failed sends with a status, and the safety-net sweep for replies lost in a restart (section 4).
+
+What it was:
 
 Unchanged since the last review. The marker "--- NOWE WIADOMOŚCI ---", and with it "extract only what's new", goes after the bot's last stored message (`assistant.split_at_last_bot_message()`), so:
 
@@ -73,7 +77,7 @@ Unchanged since the last review. The marker "--- NOWE WIADOMOŚCI ---", and with
 
 ### 1.5 Smaller
 
-- **Lists in plan answers on Telegram (P3, not verified).** The prompt asks for the plan as one exercise per line with bold day names. Telegram's legacy Markdown has no lists. A model that writes "* Przysiad …" bullets pairs those asterisks: two bullets make bold text across lines, and an odd number fails parsing, so the whole message goes out with literal asterisks. "Jaki jest mój plan?" is exactly this case. Check one plan answer in the DEBUG log; if bullets show up, turn "* " at the start of a line into "• " in `llm_output._to_whatsapp_format()`.
+- **Lists in plan answers on Telegram (P3, not verified).** The prompt asks for the plan as one exercise per line with bold day names. Telegram's legacy Markdown has no lists. A model that writes "* Przysiad …" bullets pairs those asterisks: two bullets make bold text across lines, and an odd number fails parsing, so the whole message goes out with literal asterisks. "Jaki jest mój plan?" is exactly this case. One real plan answer in `wabot.db` (2026-11-03) had no bullets (bold day name, one exercise per line), so it may never happen; if bullets show up in the DEBUG log, turn "* " at the start of a line into "• " in `llm_output._to_whatsapp_format()`.
 - **Silence for messages without "yanek" (product, P3).** In a private chat, "waga 80" gets nothing back. That's the design (several messages, then "yanek, zapisz"), but a new trainee will think the bot is broken. Telegram can react to a message (`setMessageReaction`, e.g. ✍), a cheap "saved, waiting for yanek" sign. Decide together with the trigger spelling below.
 - **Still open (2026-11-04: 1.6):** the trigger is Y-only ("Janek" doesn't work); first messages are validated against the whole report schema; logs contain health data. There's more of the latter now: INFO lines carry trainees' names, DEBUG the texts and the whole prompt. That's fine locally (`logs/` is gitignored), but it's P2 for production.
 
@@ -190,7 +194,7 @@ Today only `add_trainee.py` registers trainees, and its help says "with country 
 
 ## Decisions to make
 
-1. **A "handled" state on inbound messages (1.1).** Retries, reminders and corrections build on it. Before milestone 4.
+1. ~~**A "handled" state on inbound messages (1.1).**~~ – built 2026-11-13; the rest of the conversation design (clarifications keep the report waiting, lists, corrections against saved entries) is in PLAN.md for milestone 4.
 2. **Several days in one report (1.2):** lists in the schema, or a prompt rule for now.
 3. **Non-text messages (1.3):** the caption as text, a fixed reply otherwise. Voice later (transcribing is another OpenAI call per message).
 4. **Local Telegram:** polling or the tunnel (2.1).
@@ -215,7 +219,7 @@ Today only `add_trainee.py` registers trainees, and its help says "with country 
 
 1. ~~**1.4** and **1.3's caption**~~ – done (2026-11-13); 1.3's fixed reply for voice messages is still open.
 2. **Restart `run.sh` to check the DNS fix.** If Telegram refuses again, build 2.1 (polling).
-3. **1.1 (handled state), then 1.2 (several days)**, with tests, before or with milestone 4.
+3. ~~**1.1 (handled state)**~~ – done (2026-11-13); **1.2 (several days)** with milestone 4.
 4. **2.2** before the dashboard registers trainees.
 5. **Section 4** before milestone 7.
 6. **The rest** when you're working on the code it's in.
