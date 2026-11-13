@@ -117,6 +117,11 @@ def _complete(
     # The SDK default is 10 minutes and 2 retries; the trainee is waiting for the reply.
     client = openai.OpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1)
     messages = list(messages)
+    log.debug("Instructions for the model:\n%s", instructions)
+    log.debug(
+        "Messages for the model:\n%s",
+        "\n".join(f"[{m['role']}] {m['content']}" for m in messages),
+    )
     for attempt in range(1, ATTEMPTS + 1):
         response = client.responses.create(
             model=settings.openai_model,
@@ -142,6 +147,7 @@ def _complete(
                     return LlmOutput(reply=REFUSAL, weight=None, training=None)
 
         raw = response.output_text
+        log.debug("Model's answer (attempt %d): %s", attempt, raw)
         if not raw:
             raise RuntimeError(f"Empty response ({response.status}: {response.incomplete_details})")
         try:

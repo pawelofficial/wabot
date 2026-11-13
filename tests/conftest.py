@@ -16,6 +16,7 @@ os.environ.update(
     WHATSAPP_VERIFY_TOKEN="test-verify",
     OPENAI_API_KEY="test-openai-key",
     HARDCODED_FIRST_MESSAGE="false",
+    LOG_FILE="",  # no logs/wabot.log from tests
 )
 
 from fastapi.testclient import TestClient  # noqa: E402

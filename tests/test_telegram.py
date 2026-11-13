@@ -4,6 +4,7 @@ back where a message came from, and the Bot API client never leaking the bot tok
 import logging
 import runpy
 import sys
+import time
 import traceback
 from types import SimpleNamespace
 
@@ -374,11 +375,24 @@ def test_only_the_active_channels_settings_are_needed():
 
 def test_set_webhook_registers_the_telegram_url(monkeypatch, capsys):
     calls = []
+
+    def public_dns(url, params, timeout):
+        # The first time the name isn't there yet; Telegram is asked only once it is.
+        calls.append(f"dns {params['name']}")
+        found = calls.count(f"dns {params['name']}") > 1
+        return httpx.Response(200, json={"Status": 0, "Answer": [{}]} if found else {"Status": 3})
+
+    monkeypatch.setattr(httpx, "get", public_dns)
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
     monkeypatch.setattr(telegram, "set_webhook", lambda s, url: calls.append(url))
     monkeypatch.setattr(telegram, "bot_username", lambda s: "YanekTestBot")
     monkeypatch.setattr(sys, "argv", ["set_webhook.py", "https://abc.trycloudflare.com/"])
     runpy.run_path("scripts/set_webhook.py", run_name="__main__")
-    assert calls == ["https://abc.trycloudflare.com/telegram/webhook"]
+    assert calls == [
+        "dns abc.trycloudflare.com",
+        "dns abc.trycloudflare.com",
+        "https://abc.trycloudflare.com/telegram/webhook",
+    ]
     assert "https://t.me/YanekTestBot" in capsys.readouterr().out
 
 

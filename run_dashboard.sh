@@ -25,6 +25,7 @@ fi
 DATABASE_URL="sqlite:///$DB" uv run alembic upgrade head
 
 echo "Dashboard on $DB: http://localhost:$PORT/dashboard"
-DATABASE_URL="sqlite:///$DB" DASHBOARD_DEV_LOGIN=true \
+# Its own log file, so it can run next to run.sh (logs/wabot.log).
+DATABASE_URL="sqlite:///$DB" DASHBOARD_DEV_LOGIN=true LOG_FILE="${LOG_FILE:-logs/dashboard.log}" \
     uv run uvicorn wabot.main:app --reload --reload-include "*.html" --reload-include "*.css" \
     --reload-include "*.js" --port "$PORT" "$@"

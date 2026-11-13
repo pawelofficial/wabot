@@ -22,6 +22,7 @@ A walk through what happens at runtime: which function calls which, in what orde
 | `src/wabot/models.py` | Database tables (see the end of this file) |
 | `src/wabot/db.py` | Database engine and sessions |
 | `src/wabot/config.py` | `Settings`: every value from `.env` |
+| `src/wabot/logs.py` | Logging: the level (`LOG_LEVEL`), the console and a rotating file (`LOG_FILE`, 5 MB × 4) that also gets uvicorn's request lines; libraries that would print the Telegram token stay at WARNING |
 | `src/wabot/dashboard/routes.py` | The trainers' dashboard pages under `/dashboard` (Flow 6), `render()` and the Polish formats (`pl_date`, `pl_month`, `pl_dose`, ...); `install(app)` adds them and the routers of `plan_pages.py` and `training_pages.py` to the app |
 | `src/wabot/dashboard/auth.py` | Who is signed in (signed session cookie), `current_trainer` and `trainee_of_trainer`: the only place that decides which trainees a trainer may see |
 | `src/wabot/dashboard/queries.py` | What the pages read: `current_per_day()` (the newest row of each day), `weigh_ins()` (each day's weight with the message it came from), `workouts()` (each day's current trainings, one of the plan and one outside it, with their letters) |
@@ -48,7 +49,7 @@ Some files do work the moment they're imported, once per process:
 - `exercises.py`: reads `exercises.yaml` into `CATALOG` (a list of `CatalogExercise`), `IDS`, `BY_ID` and a name/alias → ID table for `lookup()`. Fails on duplicate IDs. `ExerciseId = Literal[IDS]` fixes the allowed exercise IDs at this point, for plans and for the LLM's output.
 - `assistant.py`: reads `prompts.yaml` into `PROMPTS`.
 - `telegram.py`: turns httpx's INFO logging off (each line has the request URL, which for Telegram has the bot token).
-- `main.py`: sets up logging and creates the FastAPI `app`. When uvicorn starts it, it logs a warning if the active channel's settings are missing (`Settings.missing_for_channel()`).
+- `main.py`: sets up logging (`logs.setup()`: `LOG_LEVEL`, console + `LOG_FILE`) and creates the FastAPI `app`. When uvicorn starts it, it logs a warning if the active channel's settings are missing (`Settings.missing_for_channel()`).
 
 So a change to `.env`, `prompts.yaml` or `exercises.yaml` needs a restart. `run.sh` starts uvicorn with `--reload-include "*.yaml"`, so YAML changes restart it by themselves. A trainee's plan is read from the db on every reply, so changing it with `scripts/add_trainee.py` needs no restart.
 
@@ -316,7 +317,7 @@ run.sh
   5. uv run uvicorn wabot.main:app --reload --reload-include "*.yaml"   (foreground)
 ```
 
-Steps 4 and 5 run at the same time: `set_webhook.py` keeps retrying until the bot started in step 5 answers Meta through the tunnel.
+Steps 4 and 5 run at the same time: `set_webhook.py` first waits until the tunnel's name is in public DNS (`wait_for_dns()`, asking dns.google over HTTPS; a resolver asked too early remembers "no such name", and Telegram's then refuses the tunnel for many minutes), then keeps retrying until the bot started in step 5 answers Meta through the tunnel.
 
 - **Wait for `Webhook set: …`** before sending a message. Until then Meta still sends messages to the previous tunnel, which is gone, and they're lost (Meta doesn't redeliver them to the new URL).
 - **Every run gets a new tunnel address**, so the webhook is set again on every start. Ctrl+C stops uvicorn and cloudflared together. If port 8000 is still taken afterwards, an old uvicorn is still running. Stop it before starting again.
@@ -467,6 +468,8 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 | change the trigger word | `BOT_NAME` in `conversation.py` |
 | change how much history the model sees | `HISTORY_WINDOW` / `HISTORY_LIMIT` in `conversation.py` |
 | change the model | `OPENAI_MODEL` in `.env` (default in `config.py`) |
+| see why the bot answered as it did | `LOG_LEVEL=DEBUG` in `.env`, restart, read `logs/wabot.log`: per message `Answering … plan: …`, the model's instructions and messages, its raw answer, what was saved, the answer sent |
+| change what gets logged, or the rotation | `log.info()` / `log.debug()` lines in `main.py` and `assistant.py`; `MAX_BYTES`, `BACKUPS`, `QUIET` in `logs.py` |
 | change the retry count | `ATTEMPTS` in `assistant.py` |
 | change plausibility limits | constants at the top of `llm_output.py` |
 | look at the dashboard with data | `uv run python scripts/simulate_month.py --canned` (or without `--canned`), then run uvicorn with `DATABASE_URL=sqlite:///simulated_month.db DASHBOARD_DEV_LOGIN=true` (Flow 6) |
@@ -487,6 +490,7 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 
 `uv run pytest`. `tests/conftest.py` points the app at a temporary SQLite db (tables recreated for every test) and sets fake tokens and keys as environment variables. It turns `.env` off for tests, so they don't depend on your local settings: only those values and the code's defaults apply. No test calls WhatsApp or OpenAI.
 
+- `test_logs.py`: the log file rotating (and keeping only `BACKUPS` old files), the level filtering, DEBUG not turning on httpx (the token), setup twice not doubling lines, the app writing `logs/wabot.log` by default. Other tests write no file (`LOG_FILE=""` in `conftest.py`).
 - `test_telegram.py`: Flow 1b: the secret (refused without it, or without a bot token), a new chat asked for the number, the own number connecting the trainee (with a "+"), someone else's contact card and an unregistered number connecting nobody, a new Telegram account taking over, `/start` again, redelivery, groups and edits ignored, a photo stored without text, one history across WhatsApp and Telegram with each reply going back where its message came from, a failed send logged; the client: the request it sends, errors never showing the token (also in the traceback), httpx's logging off, the formatting fallback, the derived secret, parsing; `missing_for_channel()`, `scripts/set_webhook.py` on Telegram, WhatsApp refusing everything without its secrets. `tests/conftest.py` makes any Telegram API call in a test fail (`no_telegram`).
 - `test_webhook.py`: Flow 1 through FastAPI's test client, with the LLM and `send_text` replaced by fakes: replies, dedup, unregistered numbers, saving, corrections, a failed save, a message followed up on. Its `add_trainee()` helper is used by the other test files.
 - `test_entries.py`: Flow 2b: one entry per day, corrections, out-of-order saves, exercises replaced, a check-in's plan version (the new one after a plan change, none without a plan), the database refusing another trainee's version, trainings before and after a day is renamed having the same day ID; the two kinds of training (what counts as outside the plan; a run on a plan day is a second training and its correction changes only the run; another plan day on the same date, or the day after "który to był dzień?", is a correction), in both `DAILY_UPDATES_ONLY` modes.

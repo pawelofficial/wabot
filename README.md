@@ -56,6 +56,8 @@ In Telegram, open [@BotFather](https://t.me/BotFather), send `/newbot`, give it 
 | `HISTORY_MODE` | Optional. `marked` (default): the LLM gets the recent chat with a marker where the new report starts. `new_only`: the code sends only the messages since the bot's last one |
 | `DAILY_UPDATES_ONLY` | Optional. `False` (default): every weight and training report is saved as its own row, so a correction ("sorki, 81") adds a row; the newest row of a day is the current value. `True`: one row per day, a newer report overwrites it |
 | `HARDCODED_FIRST_MESSAGE` | Optional. `True` makes messages the bot starts come from `src/wabot/utils.py` instead of the LLM – useful without an API key |
+| `LOG_LEVEL` | Optional. `INFO` (default): one line per message (who sent it, whether the bot answers, the trainee's plan, what was saved). `DEBUG`: also each message's text, the full prompt the model got (name, plan) and its raw answer. `WARNING`: only problems |
+| `LOG_FILE` | Optional. Default `logs/wabot.log` (`run_dashboard.sh`: `logs/dashboard.log`). Rotates at 5 MB, keeping 3 older files (`wabot.log.1` … `.3`), so at most ~20 MB. Empty: console only |
 
 `.env` is gitignored; never commit it.
 
@@ -153,11 +155,15 @@ uv run ruff check . && uv run ruff format .
 
 ## Troubleshooting
 
+Look in `logs/wabot.log` first (the same lines as the console, kept after the bot stops). For the "why did it answer that" questions set `LOG_LEVEL=DEBUG` in `.env` and restart: every answer is preceded by the exact instructions the model got (the trainee's name, the plan or "no plan") and followed by its raw JSON answer.
+
 | Symptom | Cause |
 |---|---|
 | Telegram: `401 Unauthorized` from `send_test.py` | `TELEGRAM_BOT_TOKEN` is wrong or was revoked in @BotFather |
 | Telegram: the bot asks for the number again after you shared it, or says "Ten numer nie jest zarejestrowany" | The number isn't a trainee's: register it with `scripts/add_trainee.py --phone 48…` (with the country code), then press the button again |
 | Telegram: no `POST /telegram/webhook` in the bot's log | The webhook isn't set (wait for `Webhook set` after starting `run.sh`), or `CHANNEL=whatsapp` |
+| The bot calls you by a strange name, or says you have no plan | It uses the trainee's row: `Answering … trainee 1 (name), plan: none` in the log. `scripts/add_trainee.py --name "Paweł" --plan plans/example.yaml` |
+| Telegram: `Setting the webhook failed … Failed to resolve host` | Telegram's DNS doesn't know the new tunnel's name yet (and keeps remembering that). Restart `run.sh` for a new tunnel; messages sent meanwhile wait at Telegram and arrive once the webhook is set |
 | Telegram: `401` on `POST /telegram/webhook` | The bot token changed since the webhook was set: restart `run.sh` |
 | WhatsApp: account restricted / "verify your business" | Meta's review; until then use Telegram (`CHANNEL=telegram`) |
 | `HTTP 401 … code 190` | Access token expired – generate a new one |

@@ -230,3 +230,6 @@ screen*.png
 # scripts/simulate_month.py output
 simulated_month.db*
 
+
+# Bot logs (logs.py), rotated as wabot.log.1, .2, ...; they contain trainees' messages
+logs/

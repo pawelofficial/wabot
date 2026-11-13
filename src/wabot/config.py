@@ -55,6 +55,13 @@ class Settings(DatabaseSettings):
     # where the scripts send test messages (on Telegram, once that number has connected).
     whatsapp_test_recipient: str | None = None
 
+    # How much the bot logs (logs.py): DEBUG adds each message's text, the model's instructions
+    # and its raw answer; INFO what happened to each message; WARNING only problems.
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # The log file, besides the console; it rotates (logs.py), so it stays a few MB. Empty: no
+    # file (production, where the console goes to Cloud Logging).
+    log_file: str = "logs/wabot.log"
+
     # Signs the dashboard's session cookie; any long random string, kept secret. Without it
     # nobody can sign in, except with the dev login (which then uses a fixed key).
     dashboard_session_secret: str = ""

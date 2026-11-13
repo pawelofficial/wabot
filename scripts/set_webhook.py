@@ -18,6 +18,7 @@ Run from the project root (run.sh does this by itself after starting the tunnel)
 import argparse
 import sys
 import time
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -29,6 +30,26 @@ from wabot.config import Settings, get_settings
 # can), so their own check is the test: registering is retried until it passes.
 WAIT_FOR_TUNNEL = 120
 RETRY_EVERY = 5
+# Before that, wait until the name is in public DNS (asked over HTTPS, so a VPN's DNS doesn't
+# matter): a resolver asked too early remembers "no such name" – Telegram's for many minutes,
+# and the webhook then can't be set on this tunnel at all.
+PUBLIC_DNS = "https://dns.google/resolve"
+WAIT_FOR_DNS = 60
+
+
+def wait_for_dns(base: str) -> None:
+    """Wait (up to WAIT_FOR_DNS) until the URL's host has an address in public DNS."""
+    host = urlsplit(base).hostname
+    deadline = time.monotonic() + WAIT_FOR_DNS
+    while time.monotonic() < deadline:
+        try:
+            answer = httpx.get(PUBLIC_DNS, params={"name": host, "type": "A"}, timeout=10).json()
+            if answer.get("Status") == 0 and answer.get("Answer"):
+                return
+        except (httpx.HTTPError, ValueError):
+            pass  # no answer from the DNS check: wait and ask again
+        time.sleep(2)
+    print(f"{host} isn't in public DNS yet; trying anyway", file=sys.stderr)
 
 
 def retry(register) -> None:
@@ -101,6 +122,7 @@ def main() -> None:
     settings = get_settings()
     if missing := settings.missing_for_channel():
         sys.exit(f"CHANNEL={settings.channel} needs {', '.join(missing)} in .env")
+    wait_for_dns(base)
     if settings.channel == "telegram":
         set_telegram(settings, base)
     else:
