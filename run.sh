@@ -22,9 +22,18 @@ fi
 
 if [[ "${TUNNEL:-1}" != 0 ]]; then
     if [[ -x "$CLOUDFLARED" ]]; then
-        "$CLOUDFLARED" tunnel --no-autoupdate --url "http://localhost:$PORT" >"$TUNNEL_LOG" 2>&1 &
-        tunnel_pid=$!
-        trap 'kill "$tunnel_pid" 2>/dev/null' EXIT
+        # Not started from here directly: on Windows every auto-reload of uvicorn sends Ctrl+C to
+        # the whole console, which stopped the tunnel too (scripts/start_tunnel.py).
+        if command -v cygpath >/dev/null; then
+            CLOUDFLARED=$(cygpath -w "$CLOUDFLARED")
+        fi
+        tunnel_pid=$(uv run python scripts/start_tunnel.py "$CLOUDFLARED" "$PORT" "$TUNNEL_LOG")
+        tunnel_pid=${tunnel_pid//$'\r'/}
+        if command -v taskkill >/dev/null; then
+            trap 'taskkill //PID "$tunnel_pid" //F >/dev/null 2>&1' EXIT
+        else
+            trap 'kill "$tunnel_pid" 2>/dev/null' EXIT
+        fi
 
         # In the background: wait for the tunnel's address, then register it with Telegram or
         # Meta once the bot (started below) answers through it.
@@ -45,4 +54,6 @@ if [[ "${TUNNEL:-1}" != 0 ]]; then
     fi
 fi
 
-uv run uvicorn wabot.main:app --reload --reload-include "*.yaml" --port "$PORT" "$@"
+# Reloads watch only src/ (the code and prompts.yaml): a reload drops the requests in flight, and
+# changes elsewhere (.venv, logs, the databases) shouldn't cause one.
+uv run uvicorn wabot.main:app --reload --reload-dir src --reload-include "*.yaml" --port "$PORT" "$@"

@@ -327,7 +327,9 @@ run.sh
        telegram: getMe with the token → "bot @x works, https://t.me/x"; if WHATSAPP_TEST_RECIPIENT is a
                  connected trainee, a test message to them (otherwise how to connect)
        whatsapp: a template message to WHATSAPP_TEST_RECIPIENT
-  3. (unless TUNNEL=0) start cloudflared → .cloudflared.log, killed again on exit
+  3. (unless TUNNEL=0) scripts/start_tunnel.py starts cloudflared → .cloudflared.log, without a
+     console (Windows: uvicorn's reload sends Ctrl+C to the whole console, which used to stop the
+     tunnel too, and Telegram got 530); taskkill'd again on exit
   4. in the background:
        wait up to 30 s for https://xxx.trycloudflare.com in the log
        → scripts/set_webhook.py <url>           (for CHANNEL)
@@ -343,7 +345,8 @@ run.sh
              Meta couldn't (tunnel not live yet, bot not up) → try again
            still failing after 2 minutes → exit with Meta's error;
              run.sh then prints "WARNING: set the Callback URL by hand: <url>/webhook"
-  5. uv run uvicorn wabot.main:app --reload --reload-include "*.yaml"   (foreground)
+  5. uv run uvicorn wabot.main:app --reload --reload-dir src --reload-include "*.yaml"   (foreground;
+     reloads only for changes in src/, not .venv or logs: a reload drops the requests in flight)
 ```
 
 Steps 4 and 5 run at the same time: `set_webhook.py` first waits until the tunnel's name is in public DNS (`wait_for_dns()`, asking dns.google over HTTPS; a resolver asked too early remembers "no such name", and Telegram's then refuses the tunnel for many minutes), then keeps retrying until the bot started in step 5 answers Meta through the tunnel.
