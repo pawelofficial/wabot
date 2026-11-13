@@ -262,7 +262,7 @@ def test_invalid_output_is_retried_with_the_errors(fake_openai):
     fake = fake_openai([bad, good])
 
     now = dt.datetime(2026, 11, 3, 10, tzinfo=dt.UTC)
-    result = assistant.generate_reply(Settings(), TRAINEE, [], now)
+    result = assistant.generate_reply(Settings(), TRAINEE, [], [], now)
 
     assert result.weight.kg == 82.4
     retry_input = fake.inputs[1]
@@ -274,7 +274,7 @@ def test_output_still_invalid_after_retry_raises(fake_openai):
     bad = json.dumps(output(reply=""))
     fake_openai([bad, bad])
     with pytest.raises(InvalidOutputError):
-        assistant.generate_reply(Settings(), TRAINEE, [], utcnow())
+        assistant.generate_reply(Settings(), TRAINEE, [], [], utcnow())
 
 
 def test_markdown_bold_becomes_whatsapp_bold():

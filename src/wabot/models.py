@@ -149,6 +149,12 @@ class Message(Base):
     trainee_id: Mapped[int | None] = mapped_column(ForeignKey("trainees.id"), index=True)
     trainer_id: Mapped[int | None] = mapped_column(ForeignKey("trainers.id"))
     created_at: Mapped[dt.datetime] = mapped_column(UTCDateTime, default=utcnow)
+    # A trainee's inbound message: when the bot dealt with it – a reply saved what it reported
+    # (conversation.claim()), or a fixed text answered it (the shared number, /start). Null while
+    # it waits for the next "yanek": a reply reads the waiting messages as new and everything
+    # before them as context (conversation.load_turn(), docs/CONVERSATION.md). Null for the bot's
+    # own messages.
+    handled_at: Mapped[dt.datetime | None] = mapped_column(UTCDateTime)
 
 
 class WeightEntry(Base):

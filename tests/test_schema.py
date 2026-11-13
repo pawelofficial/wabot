@@ -327,3 +327,55 @@ def test_migration_0010_keeps_whatsapp_messages_and_adds_telegram(migrated_url):
         rows = db.execute(text("SELECT wamid, phone FROM messages ORDER BY id")).all()
     engine.dispose()
     assert rows == [("wamid.A", "48000000001"), ("tg:5:1", "")]
+
+
+def test_migration_0011_marks_messages_the_bot_answered_handled(migrated_url):
+    url, alembic = migrated_url
+    command.upgrade(alembic, "0010")
+    engine = make_engine(url)
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO trainers (id, name, created_at) VALUES (1, 'T', :t)"), T0)
+        db.execute(
+            text(
+                "INSERT INTO trainees (id, trainer_id, phone, name, timezone, consent_date,"
+                " created_at) VALUES (1, 1, '48000000001', 'X', 'Europe/Warsaw', '2026-10-01', :t)"
+            ),
+            T0,
+        )
+        rows = [
+            # (id, direction, trainee_id, created_at)
+            (1, "in", 1, "2026-10-01 08:00:00.000000"),
+            (2, "in", 1, "2026-10-01 08:01:00.000000"),
+            (3, "out", 1, "2026-10-01 08:02:00.000000"),
+            (4, "out", 1, "2026-10-01 08:03:00.000000"),
+            (5, "in", 1, "2026-10-01 08:04:00.000000"),  # after the bot's last message
+            (6, "in", None, "2026-10-01 08:05:00.000000"),  # not a trainee
+        ]
+        for id_, direction, trainee_id, created_at in rows:
+            db.execute(
+                text(
+                    "INSERT INTO messages (id, channel, external_id, direction, phone, type,"
+                    " trainee_id, created_at) VALUES (:id, 'telegram', :e, :d, NULL, 'text',"
+                    " :trainee, :t)"
+                ),
+                {
+                    "id": id_,
+                    "e": f"tg:1:{id_}",
+                    "d": direction,
+                    "trainee": trainee_id,
+                    "t": created_at,
+                },
+            )
+    command.upgrade(alembic, "0011")
+    with engine.connect() as db:
+        handled = dict(db.execute(text("SELECT id, handled_at FROM messages ORDER BY id")).all())
+    engine.dispose()
+    # Handled when the bot first wrote after them; the rest waits, as under the old rule.
+    assert handled == {
+        1: "2026-10-01 08:02:00.000000",
+        2: "2026-10-01 08:02:00.000000",
+        3: None,
+        4: None,
+        5: None,
+        6: None,
+    }

@@ -38,8 +38,9 @@ class Settings(DatabaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-5.6-luna"
     # What chat history a reply call gets. "marked": the whole recent history, with a marker
-    # after the bot's last message; the LLM extracts only what's below it. "new_only": only the
-    # trainee's messages since the bot's last message (the code drops the rest) – use it if the
+    # before the first message still waiting (not yet handled by a reply, conversation.Turn); the
+    # LLM extracts only what's below it. "new_only": only the messages from the first waiting one
+    # on (the code drops the rest) – use it if the
     # LLM keeps re-extracting reports it already handled, at the cost of less context: a
     # correction of a training can't see the earlier report, so it can replace the whole day
     # with just the corrected part.

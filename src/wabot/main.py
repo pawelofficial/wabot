@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Annotated
 
 import httpx
@@ -157,15 +158,6 @@ async def receive_telegram(
         stored.trainee_id = trainee.id
         stored.trainer_id = trainee.trainer_id
     # Otherwise it's someone who isn't a linked trainee: only what dedup needs, not the text.
-    session.add(stored)
-    try:
-        session.commit()
-    except IntegrityError:
-        # Telegram redelivered a message we already stored (the link, if any, is already made).
-        session.rollback()
-        log.info("Telegram message %s: already stored (redelivered)", msg.external_id)
-        return {"status": "ok"}
-    log_inbound("Telegram", stored, trainee, msg.text)
 
     if linked:
         notice = (TELEGRAM_LINKED, telegram.REMOVE_KEYBOARD)
@@ -178,8 +170,23 @@ async def receive_telegram(
         notice = (TELEGRAM_HELP, None)
     else:
         notice = None
-        if conversation.mentions_bot(msg.text):
-            background.add_task(reply, stored.id)
+    if trainee is not None and notice is not None:
+        # The shared number or /start: answered by the fixed text, not a report, so the next
+        # reply doesn't read it as a new message.
+        stored.handled_at = utcnow()
+
+    session.add(stored)
+    try:
+        session.commit()
+    except IntegrityError:
+        # Telegram redelivered a message we already stored (the link, if any, is already made).
+        session.rollback()
+        log.info("Telegram message %s: already stored (redelivered)", msg.external_id)
+        return {"status": "ok"}
+    log_inbound("Telegram", stored, trainee, msg.text)
+
+    if notice is None and conversation.mentions_bot(msg.text):
+        background.add_task(reply, stored.id)
     if notice is not None:
         trainee_id = trainee.id if trainee is not None else None
         background.add_task(send_telegram_notice, msg.chat_id, *notice, trainee_id)
@@ -191,6 +198,12 @@ def log_inbound(channel: str, stored: Message, trainee: Trainee | None, text: st
     if trainee is None:
         log.info("%s message %s from someone who isn't a trainee", channel, stored.external_id)
         return
+    if stored.handled_at is not None:
+        what = ": answered with a fixed text"
+    elif conversation.mentions_bot(text):
+        what = ""
+    else:
+        what = ": not addressed to the bot, waits for the next yanek"
     log.info(
         "%s message %s (%s) from trainee %s (%s)%s",
         channel,
@@ -198,12 +211,16 @@ def log_inbound(channel: str, stored: Message, trainee: Trainee | None, text: st
         stored.type,
         trainee.id,
         trainee.name,
-        "" if conversation.mentions_bot(text) else ": not addressed to the bot, only stored",
+        what,
     )
     log.debug("Text of %s: %r", stored.external_id, text)
 
 
-APOLOGY = "Przepraszam, mam chwilowy problem. Spróbuj proszę za kilka minut."
+# The messages it answers stay waiting (Message.handled_at), so the next "yanek" reads them again.
+APOLOGY = (
+    "Przepraszam, mam chwilowy problem. Twoje wiadomości mam – napisz „yanek” za kilka minut, "
+    "a wtedy je zapiszę."
+)
 UNREGISTERED = "Ten numer nie jest zarejestrowany – skontaktuj się ze swoim trenerem."
 # Telegram only: the bot learns who someone is when they share their number.
 TELEGRAM_ASK_FOR_PHONE = (
@@ -217,43 +234,79 @@ TELEGRAM_HELP = (
 TELEGRAM_LINKED = "Dzięki, numer się zgadza – możemy zaczynać! " + TELEGRAM_HELP
 
 
-def reply(message_id: int) -> None:
-    """Answer a trainee's message that mentions the bot, and save what it reports."""
-    settings = get_settings()
-    now = utcnow()
-    with SessionLocal() as session:
-        message = session.get_one(Message, message_id)
-        # With their current plan version: the LLM call and the save below use this same one.
-        trainee = session.get_one(Trainee, message.trainee_id)
-        history = conversation.recent_history(session, trainee.id, now)
-        log.info(
-            "Answering %s: trainee %s (%s), plan: %s, %d messages of history",
-            message.external_id,
-            trainee.id,
-            trainee.name,
-            plan_summary(trainee),
-            len(history),
-        )
-    try:
-        result = assistant.generate_reply(settings, trainee, history, now)
-    except assistant.MissingApiKeyError as e:
-        log.error("Can't reply to %s: %s", message.external_id, e)
-        result = None
-    except Exception:
-        log.exception("LLM call for %s failed", message.external_id)
-        result = None
+# How many times reply() reads the messages again when another reply took some of them while this
+# one waited for the LLM (two replies running at once; conversation.claim()).
+TURN_ATTEMPTS = 2
 
-    with SessionLocal() as session:
-        if conversation.asked_again(session, message):
+
+class HandledMeanwhile(Exception):
+    """Another reply took some of the turn's messages while this one waited for the LLM."""
+
+
+def reply(message_id: int) -> None:
+    """Answer a trainee's message that mentions the bot ("yanek ..."). The reply reads the
+    trainee's waiting messages as new (conversation.Turn), saves what they report and marks them
+    handled in one transaction, then sends the answer back where the message came from
+    (docs/CONVERSATION.md)."""
+    settings = get_settings()
+    for _ in range(TURN_ATTEMPTS):
+        now = utcnow()
+        with SessionLocal() as session:
+            message = session.get_one(Message, message_id)
+            if reason := conversation.not_answered_because(session, message):
+                log.info("Not answering %s: %s", message.external_id, reason)
+                return
+            # With the trainee's current plan version: the LLM call and the save use this one.
+            turn = conversation.load_turn(session, message, now)
+        log.info(
+            "Answering %s: trainee %s (%s), plan: %s, %d new messages after %d of context",
+            message.external_id,
+            turn.trainee.id,
+            turn.trainee.name,
+            plan_summary(turn.trainee),
+            len(turn.new),
+            len(turn.context),
+        )
+        result = ask_llm(settings, turn, now)
+        with SessionLocal() as session:
+            try:
+                text = save_report(session, turn, result, settings.daily_updates_only)
+            except HandledMeanwhile:
+                log.info(
+                    "Another reply took some of the messages of %s meanwhile; reading them again",
+                    message.external_id,
+                )
+                continue
+        if text is None:
             log.info(
-                "Not answering %s: the reply to the trainee's next message covers it",
+                "Not answering %s: the trainee called the bot again, and the reply to that "
+                "reads these messages too",
                 message.external_id,
             )
             return
-        text = save_report(session, trainee, message, result, settings.daily_updates_only)
+        send_reply(settings, turn, text)
+        return
+    log.warning("Not answering %s: other replies kept taking its messages", message_id)
+
+
+def ask_llm(settings: Settings, turn: conversation.Turn, now: datetime) -> LlmOutput | None:
+    """The LLM's answer to the turn, or None if the call failed (logged)."""
     try:
-        # Back where the message came from.
-        conversation.send_and_store(settings, trainee, text, message.channel)
+        return assistant.generate_reply(settings, turn.trainee, turn.context, turn.new, now)
+    except assistant.MissingApiKeyError as e:
+        log.error("Can't reply to %s: %s", turn.trigger.external_id, e)
+    except Exception:
+        log.exception("LLM call for %s failed", turn.trigger.external_id)
+    return None
+
+
+def send_reply(settings: Settings, turn: conversation.Turn, text: str) -> None:
+    """Send the answer back where the message came from, and store it. A failed send is only
+    logged: what the messages reported is saved and they're handled, so the next "yanek" doesn't
+    save it again."""
+    message = turn.trigger
+    try:
+        conversation.send_and_store(settings, turn.trainee, text, message.channel)
         log.info("Answered %s on %s", message.external_id, message.channel)
         log.debug("Answer to %s: %r", message.external_id, text)
     except httpx.HTTPStatusError as e:
@@ -278,19 +331,39 @@ def plan_summary(trainee: Trainee) -> str:
 
 def save_report(
     session: Session,
-    trainee: Trainee,
-    message: Message,
+    turn: conversation.Turn,
     result: LlmOutput | None,
     daily_updates_only: bool = False,
-) -> str:
-    """Save what the LLM extracted. Returns the text to send: the LLM's reply, or the apology
-    if the LLM call or the save failed (the reply would confirm something that isn't saved)."""
+) -> str | None:
+    """Save what the LLM extracted and mark the turn's waiting messages handled, in one
+    transaction. Returns the text to send:
+    - the LLM's reply;
+    - the apology if the LLM call or the save failed: nothing is saved and the messages keep
+      waiting, so the next "yanek" reads them again (the reply would confirm something that
+      isn't saved);
+    - None if the trainee called the bot again meanwhile: the reply to that reads these messages
+      too.
+    Raises HandledMeanwhile if another reply took some of the messages meanwhile."""
+    message = turn.trigger
+    now = utcnow()
+    # Marked first: on SQLite that takes the write lock, so a message arriving now is stored
+    # either before the check below (which then sees it) or after this commit.
+    claimed = conversation.claim(session, turn, now)
+    if conversation.called_again(session, message):
+        session.rollback()
+        return None
+    if not claimed:
+        session.rollback()
+        raise HandledMeanwhile
     if result is None:
+        session.rollback()
         return APOLOGY
     try:
-        entries.save(session, trainee, message, result, daily_updates_only, now=utcnow())
+        # Commits the marks together with the entries.
+        entries.save(session, turn.trainee, message, result, daily_updates_only, now=now)
     except Exception:
         log.exception("Saving the report from %s failed", message.external_id)
+        session.rollback()
         return APOLOGY
     for kind, data in (("weight", result.weight), ("training", result.training)):
         if data is not None:

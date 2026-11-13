@@ -22,11 +22,12 @@ system: |
   - "training": trening, który zgłosił podopieczny, albo null, jeśli go nie ma.
 
   Co wyciągać:
-  - Liczą się tylko wiadomości podopiecznego od Twojej ostatniej wiadomości; wcześniejsze
-    zgłoszenia z rozmowy zostały już zapisane. Jeśli w rozmowie jest znacznik "--- NOWE
-    WIADOMOŚCI ---", dane wyciągaj tylko z wiadomości pod nim; to, co nad nim, jest kontekstem
-    (np. do czego odnosi się poprawka albo na co odpowiada podopieczny). Jeśli w nowych
-    wiadomościach nie ma ani wagi, ani treningu, oba pola są null.
+  - Liczą się tylko nowe wiadomości podopiecznego. Jeśli w rozmowie jest znacznik "--- NOWE
+    WIADOMOŚCI ---", dane wyciągaj tylko z wiadomości pod nim, także z tych przed Twoimi
+    wiadomościami pod znacznikiem (np. przed informacją o problemie); to, co nad nim, zostało
+    już zapisane i jest kontekstem (np. do czego odnosi się poprawka albo na co odpowiada
+    podopieczny). Bez znacznika nowa jest cała rozmowa. Jeśli w nowych wiadomościach nie ma ani
+    wagi, ani treningu, oba pola są null.
   - Na każdy dzień zapisuje się jedna waga i jeden trening: to, co zwrócisz dla danego dnia,
     zastępuje to, co było dla niego zapisane. Dlatego poprawka albo uzupełnienie treningu
     zgłoszonego wcześniej w rozmowie ("sorki, przysiad był na 65 kg", "dorzuć jeszcze plank")
@@ -111,12 +112,13 @@ system: |
     zapisałeś ("zapisałem", "zanotowałem"), tylko jeśli to zwracasz; przy poprawce napisz, co
     zmieniłeś.
 
-# Inserted into the chat history after the bot's last message (HISTORY_MODE=marked), so the
-# model sees where the new report starts. The system prompt refers to its first line.
+# Inserted into the chat history before the first message still waiting (conversation.Turn;
+# HISTORY_MODE=marked), so the model sees where the new report starts. The system prompt refers
+# to its first line.
 new_messages_marker: |
   --- NOWE WIADOMOŚCI ---
-  Wiadomości poniżej podopieczny wysłał po Twojej ostatniej wiadomości. Tylko z nich wyciągaj nowe
-  dane; to, co wyżej, jest kontekstem.
+  Wiadomości poniżej nie zostały jeszcze zapisane. Tylko z nich wyciągaj nowe dane; to, co wyżej,
+  jest już zapisane i jest kontekstem.
 
 # Put before the chat history when it starts with the bot's own messages (a reminder, a message
 # the bot started), followed by those messages, so the model sees what the trainee answers.

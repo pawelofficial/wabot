@@ -1,10 +1,12 @@
-"""Conversation flow shared by the webhooks and the scripts: history, composing and sending (on
-Telegram or WhatsApp; the rest of the app doesn't know which)."""
+"""Conversation flow shared by the webhooks and the scripts: history, which messages a reply reads
+(Turn: the ones still waiting are new, Message.handled_at; docs/CONVERSATION.md), composing and
+sending (on Telegram or WhatsApp; the rest of the app doesn't know which)."""
 
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from wabot import assistant, telegram, utils, whatsapp
@@ -36,25 +38,75 @@ def recent_history(session: Session, trainee_id: int, now: datetime) -> list[Mes
     return list(reversed(newest_first.all()))
 
 
-def asked_again(session: Session, message: Message) -> bool:
-    """Whether the trainee called the bot by name again after this message, with no bot message
-    in between.
+def waiting(message: Message) -> bool:
+    """A trainee's message the bot hasn't dealt with yet (Message.handled_at)."""
+    return message.direction == "in" and message.handled_at is None
 
-    The reply to that later message covers this one as well: both come after the bot's last
-    message, so both are part of the report it reads. Answering both would send two replies,
-    possibly out of order ("zanotowałem 80" arriving after "zanotowałem 81").
-    """
-    later = session.execute(
-        select(Message.direction, Message.body)
-        .where(Message.trainee_id == message.trainee_id, Message.id > message.id)
-        .order_by(Message.id)
+
+@dataclass
+class Turn:
+    """One answer of the bot: the message that called it ("yanek ..."), the trainee, and their
+    recent history split in two. `new` starts at the first message still waiting: what the reply
+    reads reports from, together with the bot's messages in between (an apology, the help after
+    /start). `context` is everything before it: already handled, there for what the new messages
+    refer to."""
+
+    trigger: Message
+    trainee: Trainee
+    context: list[Message]
+    new: list[Message]
+
+    @property
+    def waiting_ids(self) -> list[int]:
+        """The messages this reply deals with: once it has saved what they report, they're
+        handled (claim())."""
+        return [m.id for m in self.new if waiting(m)]
+
+
+def load_turn(session: Session, trigger: Message, now: datetime) -> Turn:
+    """The turn that answers `trigger`, from the trainee's recent history."""
+    trainee = session.get_one(Trainee, trigger.trainee_id)
+    history = recent_history(session, trainee.id, now)
+    first_new = next((i for i, m in enumerate(history) if waiting(m)), len(history))
+    return Turn(trigger, trainee, history[:first_new], history[first_new:])
+
+
+def called_again(session: Session, message: Message) -> bool:
+    """Whether the trainee called the bot by name again after this message. The reply to that
+    later message reads this one too (it's still waiting), so this one gets no reply of its own:
+    answering both would send two replies, possibly out of order ("zanotowałem 80" arriving
+    after "zanotowałem 81")."""
+    later = session.scalars(
+        select(Message.body).where(
+            Message.trainee_id == message.trainee_id,
+            Message.direction == "in",
+            Message.id > message.id,
+        )
     )
-    for direction, body in later:
-        if direction == "out":
-            return False
-        if mentions_bot(body):
-            return True
-    return False
+    return any(mentions_bot(body) for body in later)
+
+
+def not_answered_because(session: Session, message: Message) -> str | None:
+    """Why `message` gets no reply of its own, or None if it gets one."""
+    if message.handled_at is not None:
+        return "another reply has read it already"
+    if called_again(session, message):
+        return "the trainee called the bot again, and the reply to that reads this one too"
+    return None
+
+
+def claim(session: Session, turn: Turn, now: datetime) -> bool:
+    """Mark the turn's waiting messages handled, in the caller's transaction (it commits them
+    together with what the reply saves, or rolls both back). False if another reply has taken
+    some of them meanwhile: then this turn is out of date."""
+    ids = turn.waiting_ids
+    result = session.execute(
+        update(Message)
+        .where(Message.id.in_(ids), Message.handled_at.is_(None))
+        .values(handled_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == len(ids)
 
 
 def in_service_window(session: Session, phone: str, now: datetime) -> bool:

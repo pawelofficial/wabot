@@ -53,7 +53,7 @@ In Telegram, open [@BotFather](https://t.me/BotFather), send `/newbot`, give it 
 | `WHATSAPP_VERIFY_TOKEN` | Any random string you choose; you enter the same value in Meta's webhook settings |
 | `OPENAI_API_KEY` | platform.openai.com → API keys |
 | `OPENAI_MODEL` | Optional, defaults to `gpt-5.6-luna` |
-| `HISTORY_MODE` | Optional. `marked` (default): the LLM gets the recent chat with a marker where the new report starts. `new_only`: the code sends only the messages since the bot's last one |
+| `HISTORY_MODE` | Optional. `marked` (default): the LLM gets the recent chat with a marker where the new report starts. `new_only`: the code sends only the messages still waiting (not yet handled by a reply) |
 | `DAILY_UPDATES_ONLY` | Optional. `False` (default): every weight and training report is saved as its own row, so a correction ("sorki, 81") adds a row; the newest row of a day is the current value. `True`: one row per day, a newer report overwrites it |
 | `HARDCODED_FIRST_MESSAGE` | Optional. `True` makes messages the bot starts come from `src/wabot/utils.py` instead of the LLM – useful without an API key |
 | `LOG_LEVEL` | Optional. `INFO` (default): one line per message (who sent it, whether the bot answers, the trainee's plan, what was saved). `DEBUG`: also each message's text, the full prompt the model got (name, plan) and its raw answer. `WARNING`: only problems. Any case (`debug` works too) |

@@ -70,8 +70,8 @@ def llm(monkeypatch) -> list:
     """The LLM replaced: answers with weight 82, recording the history it was given."""
     histories = []
 
-    def fake_generate_reply(settings, trainee, history, now):
-        histories.append([m.body for m in history])
+    def fake_generate_reply(settings, trainee, context, new, now):
+        histories.append([m.body for m in context + new])
         return weight_output(82, reply="Zapisałem 82 kg.")
 
     monkeypatch.setattr(assistant, "generate_reply", fake_generate_reply)
@@ -224,6 +224,29 @@ def test_groups_and_other_updates_are_ignored(client, telegram_sent):
     post(client, update(2, "yanek 82", chat_id=-100123, user_id=CHAT, chat_type="group"))
     post(client, {"update_id": 9, "edited_message": update(3, "yanek 81")["message"]})
     assert len(stored_messages()) == 2 and len(telegram_sent) == 1  # just the connecting
+
+
+def test_start_and_the_shared_number_dont_hide_a_waiting_report(client, telegram_sent, monkeypatch):
+    # The help after /start is a bot message, but not a reply: "waga 80,4" before it still
+    # waits for the next "yanek" (before 2026-11-13 it counted as saved, and was lost).
+    turns = []
+
+    def fake_generate_reply(settings, trainee, context, new, now):
+        turns.append(([m.body for m in context], [m.body for m in new]))
+        return LlmOutput(reply="Zapisałem 80,4 kg.", weight=None, training=None)
+
+    monkeypatch.setattr(assistant, "generate_reply", fake_generate_reply)
+    connect(client, add_trainee())
+    post(client, update(2, "waga 80,4"))
+    post(client, update(3, "/start"))
+    post(client, update(4, "yanek zapisz"))
+    # The shared number (handled when the bot answered it) and the welcome are context.
+    assert turns == [
+        (
+            [None, main.TELEGRAM_LINKED],
+            ["waga 80,4", "/start", main.TELEGRAM_HELP, "yanek zapisz"],
+        )
+    ]
 
 
 def test_a_photo_is_stored_without_text(client, telegram_sent, llm):

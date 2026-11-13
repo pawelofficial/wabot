@@ -30,7 +30,7 @@ Priorities:
 
 ### 1.1 "Already handled" is guessed from the bot's last message (verified, P1) – ✅ fixed (2026-11-13)
 
-**Built:** `messages.handled_at` (migration 0011, older messages marked by the old rule) and `conversation.Turn`: a reply reads the messages still waiting as new and marks them handled in the save's transaction. A failed LLM call or save leaves them waiting, a failed send leaves them handled, `/start` and the shared number are handled at once. Each failure mode below has a test (`test_webhook.py`, `test_telegram.py`). The design and what's left for milestone 4 are in PLAN.md, "How a reply reads the conversation". Still open from the fix below: storing failed sends with a status, and the safety-net sweep for replies lost in a restart (section 4).
+**Built:** `messages.handled_at` (migration 0011, older messages marked by the old rule) and `conversation.Turn`: a reply reads the messages still waiting as new and marks them handled in the save's transaction. A failed LLM call or save leaves them waiting, a failed send leaves them handled, `/start` and the shared number are handled at once. Each failure mode below has a test (`test_webhook.py`, `test_telegram.py`). The design of the conversation handling, with what's left for milestone 4, is in docs/CONVERSATION.md. Still open from the fix below: storing failed sends with a status, and the safety-net sweep for replies lost in a restart (section 4).
 
 What it was:
 
@@ -194,7 +194,7 @@ Today only `add_trainee.py` registers trainees, and its help says "with country 
 
 ## Decisions to make
 
-1. ~~**A "handled" state on inbound messages (1.1).**~~ – built 2026-11-13; the rest of the conversation design (clarifications keep the report waiting, lists, corrections against saved entries) is in PLAN.md for milestone 4.
+1. ~~**A "handled" state on inbound messages (1.1).**~~ – built 2026-11-13; the rest of the conversation handling (a `ConversationHandler` class, clarifications keep the report waiting, answers without "yanek", lists, corrections against saved entries) is designed in docs/CONVERSATION.md, a draft for review.
 2. **Several days in one report (1.2):** lists in the schema, or a prompt rule for now.
 3. **Non-text messages (1.3):** the caption as text, a fixed reply otherwise. Voice later (transcribing is another OpenAI call per message).
 4. **Local Telegram:** polling or the tunnel (2.1).

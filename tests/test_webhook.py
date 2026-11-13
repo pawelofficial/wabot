@@ -97,11 +97,11 @@ def sent(monkeypatch) -> list[tuple[str, str]]:
 
 @pytest.fixture
 def llm(monkeypatch) -> list[list[Message]]:
-    """Replace the LLM with a stub; records the history it was given."""
+    """Replace the LLM with a stub; records the history it was given (context and new)."""
     histories = []
 
-    def fake_generate_reply(settings, trainee, history, now):
-        histories.append(history)
+    def fake_generate_reply(settings, trainee, context, new, now):
+        histories.append(context + new)
         return LlmOutput(reply=f"Odpowiedź {len(histories)}", weight=None, training=None)
 
     monkeypatch.setattr(assistant, "generate_reply", fake_generate_reply)
@@ -279,7 +279,7 @@ def test_the_trainees_own_plan_goes_to_the_llm(client, sent, monkeypatch):
     add_trainee(phone="48999888777", plan=plan_with_day("Plan Basi"))
     days = []
 
-    def fake_generate_reply(settings, trainee, history, now):
+    def fake_generate_reply(settings, trainee, context, new, now):
         days.append(plans.of(trainee).days[0].name)
         return LlmOutput(reply="Ok.", weight=None, training=None)
 
@@ -325,10 +325,95 @@ def test_a_failed_save_sends_the_apology_instead_of_the_confirmation(
     llm_returns(weight_output(80.0, reply="Zapisałem 80 kg."))
     post_signed(client, text_payload("wamid.1", "yanek waga 80"))
     assert sent == [(PHONE, main.APOLOGY)]
+    # Nothing saved, so the message still waits for the next "yanek".
+    [inbound, _] = stored_messages()
+    assert inbound.handled_at is None
+
+
+@pytest.fixture
+def llm_turns(monkeypatch):
+    """Replace the LLM with answers given in order (an exception is raised); records what each
+    call got as (context, new) message texts. `on_call(n)` runs during the n-th call."""
+
+    def install(*answers, on_call=lambda n: None) -> list[tuple[list, list]]:
+        queue, turns = list(answers), []
+
+        def fake_generate_reply(settings, trainee, context, new, now):
+            turns.append(([m.body for m in context], [m.body for m in new]))
+            on_call(len(turns))
+            answer = queue.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(assistant, "generate_reply", fake_generate_reply)
+        return turns
+
+    return install
+
+
+def nothing_to_save(reply: str = "Ok.") -> LlmOutput:
+    return LlmOutput(reply=reply, weight=None, training=None)
+
+
+def test_after_a_failed_send_the_report_isnt_saved_again(client, trainee, llm_turns, monkeypatch):
+    # The reply never reached the trainee, but the weight was saved: the next "yanek" reads the
+    # report as context, not as new (before 2026-11-13 it was saved a second time).
+    sent = []
+
+    def send_text(settings, to, text):
+        if not sent:
+            sent.append(None)
+            raise RuntimeError("Meta is down")
+        sent.append(text)
+        return "wamid.out"
+
+    monkeypatch.setattr(whatsapp, "send_text", send_text)
+    turns = llm_turns(weight_output(80.0), nothing_to_save("Jutro dzień B."))
+    post_signed(client, text_payload("wamid.1", "yanek waga 80"))
+    post_signed(client, text_payload("wamid.2", "yanek a co jutro?"))
+    assert turns[1] == (["yanek waga 80"], ["yanek a co jutro?"])
+    assert [e.kg for e in stored_weights()] == [80.0]
+    assert sent == [None, "Jutro dzień B."]
+
+
+def test_after_an_apology_the_report_is_read_again(client, sent, trainee, llm_turns):
+    # The LLM call failed: the trainee got the apology and the report keeps waiting, so
+    # "yanek, spróbuj jeszcze raz" saves it (before 2026-11-13 the apology made it count as
+    # saved, and it was lost).
+    turns = llm_turns(RuntimeError("OpenAI is down"), weight_output(80.0, reply="Zapisałem 80."))
+    post_signed(client, text_payload("wamid.1", "yanek waga 80"))
+    post_signed(client, text_payload("wamid.2", "yanek, spróbuj jeszcze raz"))
+    assert turns[1] == ([], ["yanek waga 80", main.APOLOGY, "yanek, spróbuj jeszcze raz"])
+    assert [e.kg for e in stored_weights()] == [80.0]
+    assert sent == [(PHONE, main.APOLOGY), (PHONE, "Zapisałem 80.")]
+    assert all(m.handled_at for m in stored_messages() if m.direction == "in")
+
+
+def test_messages_another_reply_took_meanwhile_are_read_again(client, sent, trainee, llm_turns):
+    # Two replies at once: while this one waits for the LLM, another one saves "waga 80" (it was
+    # waiting for both). This answer is out of date, so the reply reads the messages again.
+    post_signed(client, text_payload("wamid.1", "waga 80"))
+
+    def other_reply_saves_the_weight(n):
+        if n == 1:
+            with SessionLocal() as session:
+                first = session.scalars(select(Message).where(Message.body == "waga 80")).one()
+                first.handled_at = utcnow()
+                session.commit()
+
+    turns = llm_turns(
+        weight_output(80.0), nothing_to_save("Ok."), on_call=other_reply_saves_the_weight
+    )
+    post_signed(client, text_payload("wamid.2", "yanek zapisz"))
+    assert turns == [([], ["waga 80", "yanek zapisz"]), (["waga 80"], ["yanek zapisz"])]
+    assert stored_weights() == []  # the first answer, out of date, saved nothing
+    assert sent == [(PHONE, "Ok.")]
 
 
 def test_a_message_the_trainee_followed_up_on_is_not_answered(sent, trainee, llm_returns):
-    # Both arrived before the first reply was ready; the second one's reply covers both.
+    # Both arrived before the first reply was ready; the second one's reply covers both, and the
+    # first one doesn't even call the LLM.
     with SessionLocal() as session:
         first, second = (
             Message(
@@ -343,7 +428,7 @@ def test_a_message_the_trainee_followed_up_on_is_not_answered(sent, trainee, llm
         )
         session.add_all([first, second])
         session.commit()
-    llm_returns(weight_output(80.0), weight_output(81.0))
+    llm_returns(weight_output(81.0))
 
     main.reply(first.id)
     assert sent == []
@@ -360,7 +445,7 @@ def test_a_checkin_keeps_the_plan_version_the_reply_was_made_with(
     """The trainer changes the plan while the LLM is answering: the check-in records the
     version the report was checked against, not the newer one."""
 
-    def answer_while_the_plan_changes(settings, current, history, now):
+    def answer_while_the_plan_changes(settings, current, context, new, now):
         with SessionLocal() as session:
             plan_history.assign(
                 session,

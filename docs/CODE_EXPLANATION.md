@@ -12,7 +12,7 @@ A walk through what happens at runtime: which function calls which, in what orde
 | `src/wabot/telegram.py` | Talking to Telegram: check the webhook's secret (derived from the bot token), parse an update, send a text (with the share-number button), set the webhook; errors without the token |
 | `src/wabot/whatsapp.py` | Talking to Meta: check the webhook signature, parse the payload, send a text |
 | `src/wabot/trainees.py` | Who is behind a phone number (`find_by_phone()`) or a Telegram chat (`find_by_telegram()`, `link_telegram()`), normalizing numbers, finding or creating a trainer |
-| `src/wabot/conversation.py` | The glue: "is the bot mentioned?", chat history from the db (both channels), "did the trainee ask again?", send + store on a channel |
+| `src/wabot/conversation.py` | The glue: "is the bot mentioned?", chat history from the db (both channels), the `Turn` a reply works on (`load_turn()`: the messages still waiting are new, the handled ones before them context; `claim()` marks them handled), "did the trainee call the bot again?", send + store on a channel |
 | `src/wabot/assistant.py` | Talking to OpenAI: build the prompt, call the model, retry on invalid output |
 | `src/wabot/llm_output.py` | The shape of the model's answer (pydantic models → JSON schema) and `validate_output()` |
 | `src/wabot/entries.py` | Saving the extracted weight and training into the db (a new row per report; `DAILY_UPDATES_ONLY` updates the day's row instead) |
@@ -71,26 +71,36 @@ Meta ──POST /webhook──► main.receive_webhook()
        │     external_id already there (Meta redelivered) → rollback, skip it
        ├─ not registered        → background.add_task(reply_unregistered, msg)
        ├─ mentions_bot(text)    → background.add_task(reply, message.id)
-       └─ otherwise             → nothing; the message waits as history
+       └─ otherwise             → nothing; the message waits (handled_at null) for the next
+                                  "yanek", whose reply reads it too
   ◄── 200 {"status": "ok"}      (Meta gets the answer right away; the reply happens after)
 
 main.reply(message_id)                          runs after the 200, in the background
-  ├─ load the Message and its Trainee from the db
-  ├─ conversation.recent_history(session, trainee.id, now)
-  │     → the trainee's last 20 messages from the last 24 h, oldest first (incl. this one)
-  ├─ assistant.generate_reply(settings, trainee, history, now)   → LlmOutput   (see Flow 2)
-  │     uses the trainee's plan (plans.of(trainee)) and timezone
+  ├─ conversation.not_answered_because(session, message)   → stop, without calling the LLM, when
+  │     the message is handled already (another reply read it), or
+  │     the trainee called the bot again later (called_again()): that reply reads this one too
+  ├─ conversation.load_turn(session, message, now)   → Turn(trigger, trainee, context, new)
+  │     history = recent_history(): the trainee's last 20 messages from the last 24 h, oldest first
+  │     new     = from the first message still waiting (handled_at null) to the end, with the
+  │               bot's messages in between (an apology, the help after /start)
+  │     context = everything before it: handled, for what the new messages refer to
+  ├─ ask_llm() → assistant.generate_reply(settings, trainee, context, new, now)   → LlmOutput
+  │     (see Flow 2); uses the trainee's plan (plans.of(trainee)) and timezone
   │     any exception → result = None (a stored plan that no longer passes the checks too:
   │     the "Answering …" log line only notes it, plan_summary() → "not valid")
-  ├─ conversation.asked_again(session, message)
-  │     the trainee called the bot again after this message, with no bot message in between
-  │     → stop: the reply to that later message covers this one (its history has both)
-  ├─ save_report(session, trainee, message, result)   → the text to send
-  │     result None → APOLOGY ("Przepraszam, mam chwilowy problem...")
-  │     entries.save(session, trainee, message, result)   (see Flow 2b)
-  │         fails → APOLOGY (the reply would confirm something that isn't saved)
+  ├─ save_report(session, turn, result)   one transaction → the text to send
+  │     conversation.claim(): UPDATE the turn's waiting messages SET handled_at = now
+  │     conversation.called_again() → rollback, send nothing (the later reply reads them)
+  │     some were taken by another reply meanwhile (claim() False) → rollback, HandledMeanwhile:
+  │         reply() starts again from not_answered_because() (TURN_ATTEMPTS = 2)
+  │     result None → rollback → APOLOGY ("… Twoje wiadomości mam – napisz „yanek” za kilka
+  │         minut …"): the messages keep waiting, so the next "yanek" reads them again
+  │     entries.save(session, trainee, message, result)   (see Flow 2b) commits the marks too
+  │         fails → rollback → APOLOGY (the reply would confirm something that isn't saved)
   │     otherwise → result.reply, and log "Saved weight/training from ..."
-  └─ conversation.send_and_store(settings, trainee, text, message.channel)   back where it came from
+  └─ send_reply() → conversation.send_and_store(settings, trainee, text, message.channel)
+        │     back where it came from; a failed send is only logged: the report is saved and
+        │     its messages handled, so it isn't saved again
         ├─ conversation.send_text()
         │     "whatsapp" → whatsapp.send_text(phone)  → POST graph.facebook.com/.../messages → wamid
         │     "telegram" → telegram.send_text(chat_id, markdown=True) → "tg:<chat>:<id>"
@@ -103,7 +113,8 @@ main.reply_unregistered(msg)
 
 Things to notice:
 
-- **Every message from a trainee is stored**, with or without "yanek". Messages without the name become context the next time the bot is asked.
+- **Every message from a trainee is stored**, with or without "yanek". Messages without the name wait and are read with the next "yanek".
+- **"Handled" is stored, not guessed** (`messages.handled_at`, decided 2026-11-13). A message is handled when a reply has saved what it reported, in the same transaction as the entries. Before, everything before the bot's last message counted as saved, so a reply that failed to send made the next "yanek" save the report again, and an apology or the help after `/start` made a report count as saved when it wasn't. Now a failed LLM call or save leaves the messages waiting (the apology says so), a failed send leaves them handled, and the bot's other messages don't move the line.
 - **Unknown numbers** get the fixed reply to every message and never reach the LLM. Register yourself with `scripts/add_trainee.py` (Flow 5), or the bot answers you with that too.
 - **Dedup is the unique `external_id` column** (WhatsApp's wamid, or `tg:<chat>:<message>`). Meta and Telegram sometimes deliver the same message twice; the second insert fails and is skipped, so the bot doesn't answer twice.
 - **The reply runs after the HTTP response.** Meta wants a fast 200; an OpenAI call can take seconds. In production this becomes a Cloud Task (that's why `reply()` takes a message ID: it's what a task would carry).
@@ -139,7 +150,9 @@ Telegram ──POST /telegram/webhook──► main.receive_telegram()
                             → send_telegram_notice(TELEGRAM_ASK_FOR_PHONE, ASK_FOR_PHONE)       not stored
         trainee, "/start"   → send_telegram_notice(TELEGRAM_HELP, trainee)                     stored
         trainee, "yanek"    → main.reply(message.id)   the same as in Flow 1; the reply goes to Telegram
-        trainee, otherwise  → nothing; the message waits as history
+        trainee, otherwise  → nothing; the message waits for the next "yanek"
+  the shared number and "/start" of a trainee are stored handled (answered by the fixed text, not
+  reports), so the next reply reads them as context
 ```
 
 - **`ASK_FOR_PHONE`** is a keyboard with one button, "Udostępnij numer telefonu" (`request_contact`). Pressing it sends the trainee's own number, which Telegram has verified; a contact card from the address book has another `user_id` and connects nobody.
@@ -151,7 +164,7 @@ Telegram ──POST /telegram/webhook──► main.receive_telegram()
 
 ## Flow 2: the LLM call
 
-What happens inside `assistant.generate_reply(settings, trainee, history, now)`:
+What happens inside `assistant.generate_reply(settings, trainee, context, new, now)` (`context` and `new` from `conversation.load_turn()`, Flow 1):
 
 ```
 generate_reply()
@@ -162,12 +175,11 @@ generate_reply()
   │   + PROMPTS["trainee_name"]               "…ma na imię Kasia." (zrobiłaś / zrobiłeś)
   │   + PROMPTS["training_plan"]              with plan.prompt_text() filled in (below)
   │     (or PROMPTS["no_training_plan"] when the trainee has no plan)
-  ├─ reply_input(settings, history)       → the chat turns, shaped by HISTORY_MODE:
-  │     split_at_last_bot_message(history) → (context, new)
-  │         new = everything after the bot's last message (the report being sent now)
+  ├─ reply_input(settings, context, new)  → the chat turns, shaped by HISTORY_MODE:
+  │     new = from the first message still waiting (the report being sent now)
   │     HISTORY_MODE=marked (default):  context + developer "--- NOWE WIADOMOŚCI ---" + new
   │     HISTORY_MODE=new_only:          new only (the code drops the context)
-  │     no bot message in the history:  everything is new, no marker
+  │     no context (nothing handled in the window): everything is new, no marker
   │   to_llm_messages() turns stored messages into [{"role": "user"|"assistant", "content"}]:
   │     "in" → user, "out" → assistant; non-text → "[wiadomość typu image]", with its
   │     caption after it if it has one ("[wiadomość typu photo] yanek 80,4");
@@ -271,7 +283,7 @@ entries.save()
 - **`DAILY_UPDATES_ONLY=True`** keeps one row per trainee per day: the same two messages leave one row, 81. If a day already has several rows (saved while the setting was off), the newest one is updated.
 - **Two kinds of training a day.** For trainings "the newest row" is per kind: the plan's training and one outside the plan (`outside_plan`) are both current, so a morning day A and an evening run are two trainings. A report of the same kind is a correction, also with another plan day ("sorki, to był B") or after plan exercises saved without a day (the bot asked which day it was), because the bot repeats the day it understood so the trainee can correct it.
 - **The "newer message" check** (only with `DAILY_UPDATES_ONLY=True`) is for replies that finish out of order: an older report never overwrites a newer one. By default both are kept anyway, and the one from the newer message has the higher `message_id`.
-- Messages sent close together ("yanek 80", "yanek sorki, 81" before the first reply is out) still give one row: `asked_again()` in Flow 1 skips the first, and the second's LLM call sees both and returns 81. The 80 stays in `messages`.
+- Messages sent close together ("yanek 80", "yanek sorki, 81" before the first reply is out) still give one row: `called_again()` in Flow 1 skips the first (before or after its LLM call), and the second's turn has both as new and returns 81. The 80 stays in `messages`.
 - `trainer_id` is copied from the trainee onto every entry, so the dashboard can filter every query by trainer.
 
 ## Flow 3: the bot starts a conversation itself
@@ -439,7 +451,7 @@ trainers ──< plan_templates          (the trainer's plan library)
 | `trainees` | `id`, `trainer_id`, `phone` (unique), `telegram_chat_id` (unique, null until connected), `name`, `timezone`, `consent_date`, `plan_version_id` (null without a plan), `created_at` | `phone` is how a WhatsApp message finds its trainee, `telegram_chat_id` how a Telegram one does (set when the trainee shares that phone number with the bot; migration 0010); `plan_version_id` is the current plan, one of the trainee's own `trainee_plans` rows (foreign key `(id, plan_version_id)` → `(trainee_id, id)`), read with `plans.of(trainee)` |
 | `plan_templates` | `id`, `trainer_id`, `name` (unique per trainer), `plan` (JSON), `created_at`, `updated_at` | the trainer's library; assigning copies `plan` into `trainee_plans` |
 | `trainee_plans` | `id`, `trainer_id`, `trainee_id`, `plan` (JSON, a `plans.TrainingPlan`), `source`, `template_id` (null when not from the library, or deleted), `name`, `created_at` | written only by `plan_history.assign()`, which also moves the trainee's pointer; unique `(trainee_id, id)` for the two foreign keys that point here; migration 0006 made each plan already on a trainee its first version (`imported`), 0007 replaced the copy on the trainee with the pointer |
-| `messages` | `id`, `channel` (`telegram`/`whatsapp`), `external_id` (unique), `direction` (`in`/`out`), `phone`, `type`, `body`, `trainee_id`, `trainer_id`, `created_at` | chat history and webhook dedup; `external_id` is WhatsApp's wamid or `tg:<chat>:<message>`; `body` and `trainee_id` are null for people who aren't registered (and for messages from before migration 0002), `phone` too on Telegram. Migration 0010 renamed `wamid` to `external_id` and marked the older messages `whatsapp` |
+| `messages` | `id`, `channel` (`telegram`/`whatsapp`), `external_id` (unique), `direction` (`in`/`out`), `phone`, `type`, `body`, `trainee_id`, `trainer_id`, `created_at`, `handled_at` | chat history and webhook dedup; `handled_at`: when the bot dealt with a trainee's inbound message (a reply saved what it reported, or a fixed text answered it), null while it waits for the next "yanek" and for the bot's own messages (migration 0011, which marked older ones handled at the bot's first message after them); `external_id` is WhatsApp's wamid or `tg:<chat>:<message>`; `body` and `trainee_id` are null for people who aren't registered (and for messages from before migration 0002), `phone` too on Telegram. Migration 0010 renamed `wamid` to `external_id` and marked the older messages `whatsapp` |
 | `weight_entries` | `id`, `trainer_id`, `trainee_id`, `date`, `kg`, `message_id`, `created_at`, `updated_at` | |
 | `training_checkins` | `id`, `trainer_id`, `trainee_id`, `date`, `plan_version_id`, `plan_day_id`, `plan_day`, `outside_plan`, `status`, `missed_exercises` (JSON list of exercise IDs), `notes`, `message_id`, `created_at`, `updated_at` | `plan_version_id`: the trainee's plan version the report was checked against (null without a plan); `plan_day_id` the day's ID (the same across renames and versions), `plan_day` its name in that version. Migration 0007 filled `plan_version_id` for older check-ins with the version current at their `updated_at`; 0008 gave stored plan days their IDs (by name along each trainee's versions) and check-ins their `plan_day_id`. `outside_plan`: training outside the plan (a run), the other kind of a day's training; migration 0009 set it by the same rule as `entries.outside_plan()` |
 | `training_exercises` | `id`, `checkin_id`, `exercise_id`, `name`, `in_plan`, `sets`, `reps`, `weight_kg`, `replaces`, `comment` | same fields as `llm_output.Exercise`; `exercise_id` is the catalog ID progress is charted by, `replaces` the ID of the replaced plan exercise |
@@ -495,11 +507,11 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 `uv run pytest`. `tests/conftest.py` points the app at a temporary SQLite db (tables recreated for every test) and sets fake tokens and keys as environment variables. It turns `.env` off for tests, so they don't depend on your local settings: only those values and the code's defaults apply. No test calls WhatsApp or OpenAI.
 
 - `test_logs.py`: the log file rotating (and keeping only `BACKUPS` old files), the level filtering, DEBUG not turning on httpx (the token), setup twice not doubling lines, the app writing `logs/wabot.log` by default. Other tests write no file (`LOG_FILE=""` in `conftest.py`).
-- `test_telegram.py`: Flow 1b: the secret (refused without it, or without a bot token), a new chat asked for the number, the own number connecting the trainee (with a "+"), someone else's contact card and an unregistered number connecting nobody, a new Telegram account taking over, `/start` again, redelivery, groups and edits ignored, a photo stored without text, a photo's caption answered like a text, one history across WhatsApp and Telegram with each reply going back where its message came from, a failed send logged; the client: the request it sends, errors never showing the token (also in the traceback), httpx's logging off, the formatting fallback, the derived secret, parsing; `missing_for_channel()`, `scripts/set_webhook.py` on Telegram, WhatsApp refusing everything without its secrets. `tests/conftest.py` makes any Telegram API call in a test fail (`no_telegram`).
-- `test_webhook.py`: Flow 1 through FastAPI's test client, with the LLM and `send_text` replaced by fakes: replies, dedup, unregistered numbers, saving, corrections, a failed save, a stored plan that no longer validates (the apology), an image's caption as its text, a message followed up on. Its `add_trainee()` helper is used by the other test files.
+- `test_telegram.py`: Flow 1b: the secret (refused without it, or without a bot token), a new chat asked for the number, the own number connecting the trainee (with a "+"), someone else's contact card and an unregistered number connecting nobody, a new Telegram account taking over, `/start` again, redelivery, groups and edits ignored, a photo stored without text, a photo's caption answered like a text, `/start` and the shared number not hiding a waiting report, one history across WhatsApp and Telegram with each reply going back where its message came from, a failed send logged; the client: the request it sends, errors never showing the token (also in the traceback), httpx's logging off, the formatting fallback, the derived secret, parsing; `missing_for_channel()`, `scripts/set_webhook.py` on Telegram, WhatsApp refusing everything without its secrets. `tests/conftest.py` makes any Telegram API call in a test fail (`no_telegram`).
+- `test_webhook.py`: Flow 1 through FastAPI's test client, with the LLM and `send_text` replaced by fakes: replies, dedup, unregistered numbers, saving, corrections, a failed save (the message keeps waiting), a stored plan that no longer validates (the apology), an image's caption as its text, a message followed up on (no LLM call for it); what "handled" fixes: after a failed send the report isn't saved again, after an apology it's read again, messages another reply took meanwhile are read again. Its `add_trainee()` helper is used by the other test files.
 - `test_entries.py`: Flow 2b: one entry per day, corrections, out-of-order saves, exercises replaced, a check-in's plan version (the new one after a plan change, none without a plan), the database refusing another trainee's version, trainings before and after a day is renamed having the same day ID; the two kinds of training (what counts as outside the plan; a run on a plan day is a second training and its correction changes only the run; another plan day on the same date, or the day after "który to był dzień?", is a correction), in both `DAILY_UPDATES_ONLY` modes.
-- `test_conversation.py`: the name trigger, history per trainee, `asked_again()`, plan injection and the plan text, bad plans, the example plan, `exercises.lookup()`, the trainee's local date, `scripts/add_trainee.py`.
+- `test_conversation.py`: the name trigger, history per trainee, `called_again()`, the turn (new from the first waiting message, a reminder before it as context), the marker between context and new, plan injection and the plan text, bad plans, the example plan, `exercises.lookup()`, the trainee's local date, `scripts/add_trainee.py`.
 - `test_month_scenario.py`: the three trainees of `scenarios/` (15 reports each in October 2026, three plans, two trainers), interleaved in time order through the whole reply flow (`simulation.Replay` → `main.reply()` → `_complete()` with a fake OpenAI client returning the scenario's answer → `validate_output()` → `entries.save()`). After every message it checks that the model got only that trainee's messages and the simulated date, and what was saved: weight, plan day, status, missed exercises, exercise IDs and replacements. Runs in both `DAILY_UPDATES_ONLY` modes. Some answers say `done` where the code must make it `partial`. Kasia runs in the morning of a day B: both are that day's trainings.
 - `test_dashboard.py`: Flow 6: pages redirect to the login page without a session, the dev login only with `DASHBOARD_DEV_LOGIN`, a trainer sees only their own trainees (404 on another trainer's, also absent from the dropdown), the dropdown keeps the page, tampered or wrongly signed cookies, logout; the weight page (the newest report per day, the message, Ola's data not on Kasia's page, a message can't break out of the JSON script tag, no weigh-ins), the "Wybierz podopiecznego" hint, the Polish date, month, kg and dose formats; the trainings page (the month's cells and their marks, a run beside a plan day, the correction counts, the week counts, the details with missed exercises, replacements and messages, another trainee's trainings absent; a day's label follows the current plan by the day ID; months: days of the next and previous month, this month by default and for a bad or out-of-range `month`, no month after this one, a link to the last training; no trainings); the plan pages (every change a version and an unchanged save none, preview and restore, another trainee's version is 404, library plans created with a name of their own, assigning copies so library edits and deletes don't change the trainee, an edit keeps the library link, copying a trainee's plan to the library, another trainer's library is 404 everywhere), the plan editor (the plan shown with catalog names, a new plan, saving trims and drops empty fields, every rule refused with its Polish message and nothing saved, every day gets a label and it moves with its day, the typed values shown again, broken JSON is an error and not a crash, another trainer's plan is 404, the bot's prompt has the edited plan); Google sign-in with Google's token check faked: the trainer found by email (any case), refused for an unknown email, an unverified email or a forged token, the CSRF check, off without `GOOGLE_CLIENT_ID`.
-- `test_schema.py`: the migrations build exactly the models' schema (`alembic upgrade head` on an empty db, compared like `alembic check`), every migration can be undone and redone, migration 0007 on rows in the old shape (the pointer to the version with the same plan, a new version where the copy differed, no pointer without a plan, check-ins linked by time, the copies back on downgrade), migration 0008 (a library copy takes the library plan's day IDs, the next version keeps them by name, a renamed or new day gets a new ID, check-ins get their day's, downgrading removes them), migration 0009 (only a check-in without a plan day, not skipped and with nothing from the plan is outside the plan; the exercises survive), migration 0010 (older messages become WhatsApp ones with their wamid as `external_id`, still unique; a Telegram message without a number; a chat ID only once and bigger than 32 bits; downgrading back), and no exercise ID disappears from the catalog (`tests/catalog_ids.txt` lists every ID ever used; a new ID goes at its end).
+- `test_schema.py`: the migrations build exactly the models' schema (`alembic upgrade head` on an empty db, compared like `alembic check`), every migration can be undone and redone, migration 0007 on rows in the old shape (the pointer to the version with the same plan, a new version where the copy differed, no pointer without a plan, check-ins linked by time, the copies back on downgrade), migration 0008 (a library copy takes the library plan's day IDs, the next version keeps them by name, a renamed or new day gets a new ID, check-ins get their day's, downgrading removes them), migration 0009 (only a check-in without a plan day, not skipped and with nothing from the plan is outside the plan; the exercises survive), migration 0010 (older messages become WhatsApp ones with their wamid as `external_id`, still unique; a Telegram message without a number; a chat ID only once and bigger than 32 bits; downgrading back), migration 0011 (a trainee's message is handled at the bot's first message after it; after the last one, and from strangers, waiting), and no exercise ID disappears from the catalog (`tests/catalog_ids.txt` lists every ID ever used; a new ID goes at its end).
 - `test_llm_output.py`: `validate_output()` accepting and rejecting outputs (incl. the checks against the plan's IDs and catalog matching by name), the retry in `_complete()` with a fake OpenAI client, the schema.
