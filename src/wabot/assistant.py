@@ -32,7 +32,11 @@ def to_llm_messages(history: list[Message]) -> list[dict]:
     turns = []
     earlier_bot = []
     for msg in history:
-        text = msg.body if msg.body else f"[wiadomość typu {msg.type}]"
+        # A photo (or other non-text message) shows as its type, with its caption if it has one.
+        if msg.type == "text" and msg.body:
+            text = msg.body
+        else:
+            text = " ".join(filter(None, [f"[wiadomość typu {msg.type}]", msg.body]))
         if msg.direction == "in":
             turns.append({"role": "user", "content": text})
         elif turns:

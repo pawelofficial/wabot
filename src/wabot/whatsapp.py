@@ -15,7 +15,7 @@ class InboundMessage:
     wamid: str
     phone: str
     type: str
-    text: str | None
+    text: str | None  # a text message's text, or an image's (video's, document's) caption
 
 
 def verify_signature(app_secret: str, body: bytes, header: str | None) -> bool:
@@ -37,7 +37,12 @@ def parse_messages(payload: dict) -> list[InboundMessage]:
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
             for msg in change.get("value", {}).get("messages", []):
-                text = msg.get("text", {}).get("body") if msg["type"] == "text" else None
+                kind = msg["type"]
+                if kind == "text":
+                    text = msg.get("text", {}).get("body")
+                else:
+                    # A caption counts as the message's text, like on Telegram.
+                    text = (msg.get(kind) or {}).get("caption")
                 messages.append(
                     InboundMessage(wamid=msg["id"], phone=msg["from"], type=msg["type"], text=text)
                 )

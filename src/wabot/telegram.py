@@ -58,7 +58,7 @@ class InboundMessage:
     user_id: int | None  # the sender; in a private chat the same as chat_id
     private: bool  # a one-to-one chat with the bot, not a group
     type: str  # text, contact, photo, ... ("other" for anything else)
-    text: str | None  # only for type "text"
+    text: str | None  # a text message's text, or a photo's (video's, ...) caption
     # A shared contact: its number, and whose Telegram account it is (the sender's own when
     # they pressed the "Udostępnij numer telefonu" button).
     contact_phone: str | None = None
@@ -102,7 +102,8 @@ def parse_update(update: dict) -> InboundMessage | None:
         user_id=(msg.get("from") or {}).get("id"),
         private=chat.get("type") == "private",
         type=kind,
-        text=msg.get("text") if kind == "text" else None,
+        # A caption counts as the message's text: "yanek 80,4" under a photo of the scale.
+        text=msg.get("text") if kind == "text" else msg.get("caption"),
         contact_phone=contact.get("phone_number"),
         contact_user_id=contact.get("user_id"),
     )

@@ -1012,7 +1012,7 @@ def test_the_trainings_page_moves_between_months(client, settings, people):
 
     # Without a month (or with something that isn't one): this month, in the trainee's time.
     this_month = dt.datetime.now(ZoneInfo(kasia.timezone)).date().replace(day=1)
-    for query in ("", "?month=abc", "?month=2026-13"):
+    for query in ("", "?month=abc", "?month=2026-13", "?month=0001-01", "?month=9999-12"):
         assert client.get(url + query).context["month"] == this_month, query
     if this_month > october(1):
         page = client.get(url).text

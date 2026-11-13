@@ -228,10 +228,21 @@ def test_groups_and_other_updates_are_ignored(client, telegram_sent):
 
 def test_a_photo_is_stored_without_text(client, telegram_sent, llm):
     connect(client, add_trainee())
-    post(client, update(2, photo=[{"file_id": "x", "width": 1, "height": 1}], caption="yanek"))
+    post(client, update(2, photo=[{"file_id": "x", "width": 1, "height": 1}]))
     stored = stored_messages()[-1]
     assert (stored.type, stored.body) == ("photo", None)
     assert llm == []
+
+
+def test_a_photo_caption_is_the_message_text(client, telegram_sent, llm):
+    # A photo of the scale with "yanek 80,4" under it is a report like a text message.
+    connect(client, add_trainee())
+    photo = [{"file_id": "x", "width": 1, "height": 1}]
+    post(client, update(2, photo=photo, caption="yanek waga 80,4"))
+    photo_message = stored_messages()[-2]  # the last one is the reply
+    assert (photo_message.type, photo_message.body) == ("photo", "yanek waga 80,4")
+    assert llm[0][-1] == "yanek waga 80,4"
+    assert telegram_sent[-1].text == "Zapisałem 82 kg."
 
 
 def test_one_history_across_both_channels(client, telegram_sent, llm, monkeypatch):

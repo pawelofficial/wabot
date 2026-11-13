@@ -54,6 +54,10 @@ def test_setup_twice_doesnt_double_the_lines(tmp_path, restore_logging):
     assert path.read_text(encoding="utf-8").count("once") == 1
 
 
+def test_the_level_is_any_case():
+    assert Settings(log_level="debug").log_level == "DEBUG"
+
+
 def test_an_unknown_level_is_refused():
     with pytest.raises(ValueError):
         Settings(log_level="LOUD")

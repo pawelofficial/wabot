@@ -226,13 +226,12 @@ def reply(message_id: int) -> None:
         # With their current plan version: the LLM call and the save below use this same one.
         trainee = session.get_one(Trainee, message.trainee_id)
         history = conversation.recent_history(session, trainee.id, now)
-        plan = plans.of(trainee)
         log.info(
             "Answering %s: trainee %s (%s), plan: %s, %d messages of history",
             message.external_id,
             trainee.id,
             trainee.name,
-            f"version {trainee.plan_version_id}, {len(plan.days)} days" if plan else "none",
+            plan_summary(trainee),
             len(history),
         )
     try:
@@ -264,6 +263,17 @@ def reply(message_id: int) -> None:
         log.error("Sending reply to %s failed: %s", message.external_id, e)
     except Exception:
         log.exception("Sending reply to %s failed", message.external_id)
+
+
+def plan_summary(trainee: Trainee) -> str:
+    """The trainee's plan for the log: "version 3, 4 days", "none". A stored plan that no longer
+    passes the checks is only noted here; the LLM call below fails on it and the trainee gets the
+    apology."""
+    try:
+        plan = plans.of(trainee)
+    except ValueError:  # pydantic's ValidationError
+        return f"version {trainee.plan_version_id}, not valid"
+    return f"version {trainee.plan_version_id}, {len(plan.days)} days" if plan else "none"
 
 
 def save_report(

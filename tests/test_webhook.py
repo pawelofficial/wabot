@@ -214,6 +214,7 @@ def test_llm_turns_start_with_the_trainee():
         Message(direction="in", phone="1", type="text", body="hej"),
         Message(direction="out", phone="1", type="text", body="Cześć!"),
         Message(direction="in", phone="1", type="image", body=None),
+        Message(direction="in", phone="1", type="image", body="yanek 80,4"),  # with a caption
     ]
     assert assistant.to_llm_messages(history) == [
         {
@@ -224,7 +225,43 @@ def test_llm_turns_start_with_the_trainee():
         {"role": "user", "content": "hej"},
         {"role": "assistant", "content": "Cześć!"},
         {"role": "user", "content": "[wiadomość typu image]"},
+        {"role": "user", "content": "[wiadomość typu image] yanek 80,4"},
     ]
+
+
+def test_an_image_caption_is_the_message_text(client, trainee, sent, llm):
+    payload = text_payload("wamid.1", "")
+    [msg] = payload["entry"][0]["changes"][0]["value"]["messages"]
+    del msg["text"]
+    msg["type"] = "image"
+    msg["image"] = {"id": "media-1", "mime_type": "image/jpeg", "caption": "yanek waga 80,4"}
+    post_signed(client, payload)
+    with SessionLocal() as session:
+        stored = session.scalars(select(Message).where(Message.direction == "in")).one()
+    assert (stored.type, stored.body) == ("image", "yanek waga 80,4")
+    assert len(llm) == 1 and len(sent) == 1
+
+
+def test_a_stored_plan_that_no_longer_validates_gets_the_apology(trainee, sent, monkeypatch):
+    # E.g. an exercise taken out of the catalog: the trainee is told, not left without a reply.
+    with SessionLocal() as session:
+        version = session.get(Trainee, trainee.id).plan_version
+        version.plan = {"days": [{"name": "A", "exercises": [{"id": "not_in_the_catalog"}]}]}
+        message = Message(
+            channel="whatsapp",
+            external_id="wamid.1",
+            direction="in",
+            phone=PHONE,
+            type="text",
+            body="yanek waga 80",
+            trainee_id=trainee.id,
+            trainer_id=trainee.trainer_id,
+        )
+        session.add(message)
+        session.commit()
+        message_id = message.id
+    main.reply(message_id)
+    assert sent == [(PHONE, main.APOLOGY)]
 
 
 def test_unregistered_number_gets_a_fixed_reply_and_its_text_is_not_kept(client, sent, llm):

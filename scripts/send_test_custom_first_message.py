@@ -39,6 +39,10 @@ def main() -> None:
     to = args.to or settings.whatsapp_test_recipient
     if not to:
         sys.exit("No recipient: pass --to or set WHATSAPP_TEST_RECIPIENT in .env")
+    try:
+        to = trainees.normalize_phone(to)  # "+48 123 456 789" → "48123456789", as stored
+    except ValueError as e:
+        sys.exit(str(e))
 
     now = utcnow()
     with SessionLocal() as session:

@@ -2,7 +2,7 @@ import os
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -71,6 +71,12 @@ class Settings(DatabaseSettings):
     google_client_id: str = ""
     # Local development only: the login page lists the trainers to sign in as, no Google.
     dashboard_dev_login: bool = False
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _any_case(cls, value):
+        # LOG_LEVEL=debug works as well as DEBUG.
+        return value.upper() if isinstance(value, str) else value
 
     def missing_for_channel(self) -> list[str]:
         """The active channel's settings that are empty, as .env names."""
