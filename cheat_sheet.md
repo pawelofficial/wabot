@@ -37,6 +37,12 @@ uv run python scripts/setup_db.py --new dev.db --simulated
 
 - To switch databases, change `DATABASE_URL` in `.env` and restart `run.sh` / `run_dashboard.sh`.
 - Just once, without changing `.env` (Git Bash): `DATABASE_URL=sqlite:///dev.db bash run_dashboard.sh`.
+  PowerShell: `$env:DATABASE_URL="sqlite:///dev.db"; bash run_dashboard.sh` (stays set in that window).
+- Start from an empty database:
+  1. `uv run python scripts/setup_db.py --new dev.db`
+  2. put the line it prints (`DATABASE_URL=sqlite:///dev.db`) into `.env`
+  3. restart `run.sh` / `run_dashboard.sh`
+  4. register yourself: `uv run python scripts/add_trainee.py --plan plans/example.yaml`
 - `--simulated` backs the database up to `db_backups/` first, uses the scenarios' correct answers
   (no OpenAI), and refuses if the simulated trainees are already there.
 
