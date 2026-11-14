@@ -111,9 +111,9 @@ def test_on_cloud_run_the_reply_is_sent_before_the_webhook_answers(
 
 
 def test_a_request_that_changes_nothing_uploads_nothing(client, cloud_run, uploads):
-    client.get("/")
-    client.get("/")
+    client.get("/health")
+    client.get("/health")
     assert len(uploads) <= 1  # at most the first request after start (state unknown)
     uploads.clear()
-    client.get("/")
+    client.get("/health")
     assert uploads == []

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Milestone 0 (developer setup) is done and so is milestone 1 (echo bot); milestone 2 (submissions: trainees, plans, weight and training in the database) is done; milestone 3 (trainer dashboard) is in progress, and milestone 4 (conversation: corrections, clarifications, diet) comes after it. The bot runs on Telegram since 2026-11-12 (Meta restricted the WhatsApp account); WhatsApp stays in the code, `CHANNEL` in `.env` switches. Since 2026-11-14 the bot also runs on Google Cloud: Cloud Run in project `yanek-bot` (`europe-central2`), SQLite kept in the bucket `gs://yanek-bot-db`, secrets in Secret Manager, scales to zero; how it works, the deploy command and the caveats (one instance only; `run.sh` moves the Telegram webhook to its tunnel) are in `docs/DEPLOY.md`. Settings and secrets (Telegram bot token, Meta access token, app secret, webhook verify token, OpenAI key) are in `.env` (gitignored; never print or commit it).
+Milestone 0 (developer setup) is done and so is milestone 1 (echo bot); milestone 2 (submissions: trainees, plans, weight and training in the database) is done; milestone 3 (trainer dashboard) is in progress, and milestone 4 (conversation: corrections, clarifications, diet) comes after it. The bot runs on Telegram since 2026-11-12 (Meta restricted the WhatsApp account); WhatsApp stays in the code, `CHANNEL` in `.env` switches. Since 2026-11-14 the bot also runs on Google Cloud: Cloud Run in project `yanek-bot` (`europe-west1`, at https://tubealpha.pro), SQLite kept in the bucket `gs://yanek-bot-db`, secrets in Secret Manager, scales to zero; how it works, the deploy command and the caveats (one instance only; `run.sh` moves the Telegram webhook to its tunnel) are in `docs/DEPLOY.md`. Settings and secrets (Telegram bot token, Meta access token, app secret, webhook verify token, OpenAI key) are in `.env` (gitignored; never print or commit it).
 
 ## Commands
 
@@ -66,7 +66,7 @@ The product plan, decisions and milestones are in `docs/PLAN.md`; read it before
 
 ## Key decisions (details in docs/PLAN.md)
 
-- Python, FastAPI on Cloud Run, Cloud SQL Postgres, Cloud Storage, Cloud Tasks, Cloud Scheduler; region `europe-central2`.
+- Python, FastAPI on Cloud Run, Cloud SQL Postgres, Cloud Storage, Cloud Tasks, Cloud Scheduler; region `europe-central2` (the Cloud Run service is in `europe-west1` for its custom domain, docs/DEPLOY.md).
 - Messenger: Telegram Bot API now (`CHANNEL=telegram`), Meta WhatsApp Cloud API kept for later (`CHANNEL=whatsapp`), both called directly. Replies go back on the channel the message came from. On WhatsApp, reminders outside the 24 h window need approved templates.
 - Multi-trainer: every trainee-owned row carries `trainer_id`; the trainee is resolved server-side from the sender's phone number, and the LLM's tools never accept a trainee ID from the model.
 - The bot answers only messages that mention it by name ("yanek"); everything else is stored as history.

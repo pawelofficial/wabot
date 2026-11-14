@@ -1093,3 +1093,9 @@ def test_the_trainings_page_without_trainings(client, settings, people):
     sign_in(client, people["Trener Marek"])
     page = client.get(f"/dashboard/trainees/{people['Kasia'].id}/trainings").text
     assert "Brak zgłoszonych treningów" in page and "calendar" not in page
+
+
+def test_the_sites_address_opens_the_dashboard(client):
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307 and response.headers["location"] == "/dashboard"
+    assert client.get("/health").json() == {"status": "ok"}

@@ -6,7 +6,7 @@ from typing import Annotated
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
@@ -80,7 +80,13 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
+def home() -> RedirectResponse:
+    """The site's address (tubealpha.pro) opens the dashboard."""
+    return RedirectResponse("/dashboard")
+
+
+@app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
 
