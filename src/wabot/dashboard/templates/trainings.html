@@ -128,7 +128,7 @@
       </div>
       {% endif %}
       {% if c.notes %}<p class="small"><span class="muted">Uwagi:</span> {{ c.notes }}</p>{% endif %}
-      {% if w.message %}<p class="workout-message small">„{{ w.message.body }}” <span class="muted nowrap">· {{ w.message.created_at|pl_datetime(default_timezone) }}</span></p>{% endif %}
+      {% if w.message and not w.conversations %}<p class="workout-message small">„{{ w.message.body }}” <span class="muted nowrap">· {{ w.message.created_at|pl_datetime(default_timezone) }}</span></p>{% endif %}
       {{ conversations(w.conversations, trainee) }}
     </div>
     {% endfor %}

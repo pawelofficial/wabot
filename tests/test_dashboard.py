@@ -258,7 +258,12 @@ def test_the_weight_page_shows_the_current_weight_of_each_day(client, settings, 
     page = client.get(f"/dashboard/trainees/{kasia.id}/weight").text
     assert "81,9 kg" in page and "−0,5 kg" in page  # last weight, change since the first
     assert "pt 9 paź 2026" in page
-    assert "„yanek sorki, 81,9”" in page and "poprawiona" in page
+    assert "poprawiona" in page
+    # The message is in "Pokaż wiadomości", not quoted above it again.
+    assert (
+        "„yanek sorki, 81,9”" not in page
+        and page.count('<div class="chat-text">yanek sorki, 81,9</div>') == 1
+    )
     assert "18,9 kg" not in page and "65" not in page  # the replaced report, Ola's weight
     # The replaced report is only in the messages behind the entry.
     assert "2 zgłoszenia" in page and "zastąpione późniejszym" in page and "yanek 18,9" in page
@@ -1014,7 +1019,9 @@ def test_the_trainings_page_shows_the_month_and_each_days_trainings(client, sett
     assert 'href="#d-2026-10-06"' in page and 'id="d-2026-10-06"' in page
     assert f"Niezrobione: {NAME['leg_curl']}, {NAME['calf_raise']}" in page
     assert f"zamiast: {NAME['barbell_row']}" in page and "62,5 kg" in page
-    assert "„yanek pobiegałem 5 km”" in page and "ból barku" in page
+    assert "ból barku" in page
+    assert "„yanek pobiegałem 5 km”" not in page  # only in "Pokaż wiadomości"
+    assert page.count('<div class="chat-text">yanek pobiegałem 5 km</div>') == 1
     assert page.count(">poprawiony<") == 1
     assert "2 pełne, 1 częściowy" in page
     assert "„yanek martwy”" not in page  # the corrected report

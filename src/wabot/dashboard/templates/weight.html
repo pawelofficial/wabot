@@ -44,7 +44,7 @@
           <td class="num nowrap">{{ w.kg|pl_kg }}</td>
           <td class="num nowrap muted">{% if i > 0 %}{{ (w.kg - weigh_ins[i - 1].kg)|pl_kg(true) }}{% endif %}</td>
           <td class="message">
-            {% if w.message %}„{{ w.message }}”{% endif %}
+            {% if w.message and not w.conversations %}„{{ w.message }}”{% endif %}
             {% if w.reports > 1 %}<span class="badge" title="Tego dnia waga była zgłoszona {{ w.reports }} razy; liczy się ostatnie zgłoszenie">poprawiona</span>{% endif %}
             {{ conversations(w.conversations, trainee) }}
           </td>
