@@ -10,6 +10,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from wabot import exercises
 from wabot.db import make_engine
@@ -271,3 +272,110 @@ def test_migration_0009_tells_training_outside_the_plan_from_the_plans(migrated_
     engine.dispose()
     assert outside == {i: row[3] for i, row in rows.items()}
     assert exercises_left == 5  # the check-ins' exercises are still there
+
+
+def test_migration_0010_keeps_whatsapp_messages_and_adds_telegram(migrated_url):
+    url, alembic = migrated_url
+    command.upgrade(alembic, "0009")
+    engine = make_engine(url)
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO trainers (id, name, created_at) VALUES (1, 'T', :t)"), T0)
+        for trainee_id, phone in ((1, "48000000001"), (2, "48000000002")):
+            db.execute(
+                text(
+                    "INSERT INTO trainees (id, trainer_id, phone, name, timezone, consent_date,"
+                    " created_at) VALUES (:id, 1, :p, 'X', 'Europe/Warsaw', '2026-10-01', :t)"
+                ),
+                {"id": trainee_id, "p": phone, **T0},
+            )
+        db.execute(
+            text(
+                "INSERT INTO messages (id, wamid, direction, phone, type, body, trainee_id,"
+                " created_at) VALUES (1, 'wamid.A', 'in', '48000000001', 'text', 'yanek 80', 1, :t)"
+            ),
+            T0,
+        )
+    command.upgrade(alembic, "0010")
+    with engine.connect() as db:
+        rows = db.execute(text("SELECT id, channel, external_id, body FROM messages")).all()
+    assert rows == [(1, "whatsapp", "wamid.A", "yanek 80")]
+
+    insert = text(
+        "INSERT INTO messages (channel, external_id, direction, phone, type, created_at)"
+        " VALUES ('telegram', :e, 'in', NULL, 'text', :t)"
+    )
+    with engine.begin() as db:
+        db.execute(insert, {"e": "tg:5:1", **T0})  # from someone who isn't a trainee: no number
+    # Still the dedup: an ID only once.
+    with pytest.raises(IntegrityError), engine.begin() as db:
+        db.execute(insert, {"e": "tg:5:1", **T0})
+    # A Telegram chat belongs to one trainee; Telegram's IDs don't fit 32 bits.
+    link = text("UPDATE trainees SET telegram_chat_id = :c WHERE id = :id")
+    with engine.begin() as db:
+        db.execute(link, {"c": 7_000_000_000, "id": 1})
+    with pytest.raises(IntegrityError), engine.begin() as db:
+        db.execute(link, {"c": 7_000_000_000, "id": 2})
+    with engine.connect() as db:
+        assert db.execute(text("SELECT telegram_chat_id FROM trainees WHERE id = 1")).scalar() == (
+            7_000_000_000
+        )
+    engine.dispose()
+
+    command.downgrade(alembic, "0009")
+    engine = make_engine(url)
+    with engine.connect() as db:
+        rows = db.execute(text("SELECT wamid, phone FROM messages ORDER BY id")).all()
+    engine.dispose()
+    assert rows == [("wamid.A", "48000000001"), ("tg:5:1", "")]
+
+
+def test_migration_0011_marks_messages_the_bot_answered_handled(migrated_url):
+    url, alembic = migrated_url
+    command.upgrade(alembic, "0010")
+    engine = make_engine(url)
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO trainers (id, name, created_at) VALUES (1, 'T', :t)"), T0)
+        db.execute(
+            text(
+                "INSERT INTO trainees (id, trainer_id, phone, name, timezone, consent_date,"
+                " created_at) VALUES (1, 1, '48000000001', 'X', 'Europe/Warsaw', '2026-10-01', :t)"
+            ),
+            T0,
+        )
+        rows = [
+            # (id, direction, trainee_id, created_at)
+            (1, "in", 1, "2026-10-01 08:00:00.000000"),
+            (2, "in", 1, "2026-10-01 08:01:00.000000"),
+            (3, "out", 1, "2026-10-01 08:02:00.000000"),
+            (4, "out", 1, "2026-10-01 08:03:00.000000"),
+            (5, "in", 1, "2026-10-01 08:04:00.000000"),  # after the bot's last message
+            (6, "in", None, "2026-10-01 08:05:00.000000"),  # not a trainee
+        ]
+        for id_, direction, trainee_id, created_at in rows:
+            db.execute(
+                text(
+                    "INSERT INTO messages (id, channel, external_id, direction, phone, type,"
+                    " trainee_id, created_at) VALUES (:id, 'telegram', :e, :d, NULL, 'text',"
+                    " :trainee, :t)"
+                ),
+                {
+                    "id": id_,
+                    "e": f"tg:1:{id_}",
+                    "d": direction,
+                    "trainee": trainee_id,
+                    "t": created_at,
+                },
+            )
+    command.upgrade(alembic, "0011")
+    with engine.connect() as db:
+        handled = dict(db.execute(text("SELECT id, handled_at FROM messages ORDER BY id")).all())
+    engine.dispose()
+    # Handled when the bot first wrote after them; the rest waits, as under the old rule.
+    assert handled == {
+        1: "2026-10-01 08:02:00.000000",
+        2: "2026-10-01 08:02:00.000000",
+        3: None,
+        4: None,
+        5: None,
+        6: None,
+    }

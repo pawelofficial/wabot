@@ -51,13 +51,19 @@ class Week:
         return sum(w.kind in ("done", "partial") for d in self.days for w in d.workouts)
 
 
+# Months the calendar shows; anything else in ?month= is treated like a value that isn't a month
+# (the calendar's weeks and the ‹ › links would leave the years a date can have).
+FIRST_YEAR, LAST_YEAR = 2000, 2100
+
+
 def month_asked(value: str | None, today: dt.date) -> dt.date:
-    """The first day of the month in ?month=2026-10; this month without one or if it's not a
-    month."""
+    """The first day of the month in ?month=2026-10; this month without one, if it's not a month,
+    or if it's outside FIRST_YEAR–LAST_YEAR."""
     try:
-        return dt.date.fromisoformat(f"{value}-01")
+        month = dt.date.fromisoformat(f"{value}-01")
     except (TypeError, ValueError):
         return today.replace(day=1)
+    return month if FIRST_YEAR <= month.year <= LAST_YEAR else today.replace(day=1)
 
 
 def shift(month: dt.date, months: int) -> dt.date:

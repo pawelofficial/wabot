@@ -5,6 +5,7 @@ name: Ola
 trainer: Trenerka Ewa
 trainer_email: ewa.trenerka@example.com
 phone: "48000000003"
+telegram_chat_id: 700000003
 plan: plans/beginner_fbw.yaml
 plan_name: Początkujący – 2 treningi na zmianę
 

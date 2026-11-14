@@ -132,7 +132,7 @@ def test_wrong_structure_is_rejected(data, error):
         (output(reply='{"reply": "x"}'), "not JSON"),
         (output(reply="Super. Եթե chcesz, rozpiszę środę."), "non-Polish letters 'Եեթ'"),
         (output(reply="Записал 82 kg."), "non-Polish letters"),
-        (output(reply="x" * 4097), "WhatsApp allows 4096"),
+        (output(reply="x" * 4097), "a chat message allows 4096"),
         (output(weight={"kg": 8.24, "date": "2026-11-03"}), "outside 30–300 kg"),
         (output(weight={"kg": 82, "date": "2026-11-04"}), "in the future"),
         (output(weight={"kg": 82, "date": "2026-09-01"}), "more than 31 days ago"),
@@ -262,7 +262,7 @@ def test_invalid_output_is_retried_with_the_errors(fake_openai):
     fake = fake_openai([bad, good])
 
     now = dt.datetime(2026, 11, 3, 10, tzinfo=dt.UTC)
-    result = assistant.generate_reply(Settings(), TRAINEE, [], now)
+    result = assistant.generate_reply(Settings(), TRAINEE, [], [], now)
 
     assert result.weight.kg == 82.4
     retry_input = fake.inputs[1]
@@ -274,7 +274,7 @@ def test_output_still_invalid_after_retry_raises(fake_openai):
     bad = json.dumps(output(reply=""))
     fake_openai([bad, bad])
     with pytest.raises(InvalidOutputError):
-        assistant.generate_reply(Settings(), TRAINEE, [], utcnow())
+        assistant.generate_reply(Settings(), TRAINEE, [], [], utcnow())
 
 
 def test_markdown_bold_becomes_whatsapp_bold():

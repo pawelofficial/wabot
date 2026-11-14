@@ -7,7 +7,8 @@ current_per_day() and workouts() apply that rule, so the pages don't each repeat
 """
 
 import datetime as dt
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
@@ -33,17 +34,67 @@ def current_per_day(session: Session, model, trainee: Trainee) -> list:
 
 
 def _messages(session: Session, rows) -> dict[int, Message]:
-    """The WhatsApp messages the rows were saved from, by ID."""
+    """The messages the rows were saved from, by ID."""
     ids = [r.message_id for r in rows if r.message_id]
     return {m.id: m for m in session.scalars(select(Message).where(Message.id.in_(ids)))}
+
+
+def conversations(
+    session: Session, trainee: Trainee, message_ids: list[int | None]
+) -> dict[int, list[Message]]:
+    """For each message an entry was saved from (the "yanek" a reply answered): that reply's
+    conversation, oldest first. It's what the reply read as new, the trainee's messages it
+    marked handled together (one `handled_at`, conversation.claim()) and anything in between,
+    then the bot's answer (the first bot message after them). A message without `handled_at`
+    (saved before migration 0011) is shown alone with the answer."""
+    ids = {i for i in message_ids if i}
+    if not ids:
+        return {}
+    own = (Message.trainee_id == trainee.id, Message.trainer_id == trainee.trainer_id)
+    triggers = list(session.scalars(select(Message).where(Message.id.in_(ids), *own)))
+    handled = {m.handled_at for m in triggers if m.handled_at is not None}
+    turns = {
+        at: (first, last)
+        for at, first, last in session.execute(
+            select(Message.handled_at, func.min(Message.id), func.max(Message.id))
+            .where(*own, Message.direction == "in", Message.handled_at.in_(handled))
+            .group_by(Message.handled_at)
+        )
+    }
+    found = {}
+    for trigger in triggers:
+        first, last = turns.get(trigger.handled_at, (trigger.id, trigger.id))
+        answer = session.scalar(
+            select(func.min(Message.id)).where(*own, Message.direction == "out", Message.id > last)
+        )
+        found[trigger.id] = list(
+            session.scalars(
+                select(Message)
+                .where(*own, Message.id >= first, Message.id <= (answer or last))
+                .order_by(Message.id)
+            )
+        )
+    return found
+
+
+def _reports(session: Session, trainee: Trainee, rows, key) -> dict:
+    """The conversations of every report of each `key(row)`, oldest report first."""
+    by_message = conversations(session, trainee, [r.message_id for r in rows])
+    grouped: dict = {}
+    for row in sorted(rows, key=lambda r: r.id):
+        if row.message_id in by_message:
+            grouped.setdefault(key(row), []).append(by_message[row.message_id])
+    return grouped
 
 
 @dataclass
 class WeighIn:
     date: dt.date
     kg: float
-    message: str | None  # the WhatsApp message the weight was saved from
+    message: str | None  # the message the weight was saved from
     reports: int  # how many reports that day had (more than 1: the trainee corrected it)
+    # The conversation of each of the day's reports, oldest first (the last one counts).
+    conversations: list[list[Message]] = field(default_factory=list)
 
     def as_json(self) -> dict:
         return {"date": self.date.isoformat(), "kg": self.kg, "message": self.message}
@@ -53,19 +104,22 @@ def weigh_ins(session: Session, trainee: Trainee) -> list[WeighIn]:
     """The trainee's current weight of each day, with the message it came from."""
     entries = current_per_day(session, WeightEntry, trainee)
     messages = _messages(session, entries)
-    reports = dict(
-        session.execute(
-            select(WeightEntry.date, func.count())
-            .where(WeightEntry.trainee_id == trainee.id)
-            .group_by(WeightEntry.date)
-        ).all()
+    every_report = list(
+        session.scalars(
+            select(WeightEntry).where(
+                WeightEntry.trainee_id == trainee.id, WeightEntry.trainer_id == trainee.trainer_id
+            )
+        )
     )
+    reports = Counter(e.date for e in every_report)
+    talks = _reports(session, trainee, every_report, lambda e: e.date)
     return [
         WeighIn(
             e.date,
             e.kg,
             messages[e.message_id].body if e.message_id in messages else None,
             reports.get(e.date, 1),
+            talks.get(e.date, []),
         )
         for e in entries
     ]
@@ -77,7 +131,7 @@ class Workout:
     the plan), with what the calendar shows about it."""
 
     checkin: TrainingCheckin
-    message: Message | None  # the WhatsApp message it was saved from
+    message: Message | None  # the message it was saved from
     reports: int  # reports of this kind that day (more than 1: the trainee corrected it)
     # Its plan day's letter (A): in the current plan if the day is still in it (found by the
     # day's ID, so a renamed day keeps its letter), else in the version it was saved against.
@@ -87,6 +141,8 @@ class Workout:
     current_name: str | None
     # How many exercises its plan day had (the "5" of "4/5"); None without a known day.
     planned: int | None
+    # The conversation of each report of this kind that day, oldest first (the last one counts).
+    conversations: list[list[Message]] = field(default_factory=list)
 
     @property
     def kind(self) -> str:
@@ -154,14 +210,9 @@ def workouts(session: Session, trainee: Trainee, first: dt.date, last: dt.date) 
             .order_by(TrainingCheckin.date, TrainingCheckin.outside_plan)
         )
     )
-    reports = {
-        (day, outside): n
-        for day, outside, n in session.execute(
-            select(TrainingCheckin.date, TrainingCheckin.outside_plan, func.count())
-            .where(*in_range)
-            .group_by(TrainingCheckin.date, TrainingCheckin.outside_plan)
-        )
-    }
+    every_report = list(session.scalars(select(TrainingCheckin).where(*in_range)))
+    reports = Counter((c.date, c.outside_plan) for c in every_report)
+    talks = _reports(session, trainee, every_report, lambda c: (c.date, c.outside_plan))
     messages = _messages(session, checkins)
     # The plan versions the trainings were checked against (each the trainee's own).
     versions = {
@@ -203,6 +254,7 @@ def workouts(session: Session, trainee: Trainee, first: dt.date, last: dt.date) 
                 label=label,
                 current_name=current_name,
                 planned=len(day.exercises) if day is not None else None,
+                conversations=talks.get((c.date, c.outside_plan), []),
             )
         )
     return found

@@ -32,7 +32,14 @@ def to_llm_messages(history: list[Message]) -> list[dict]:
     turns = []
     earlier_bot = []
     for msg in history:
-        text = msg.body if msg.body else f"[wiadomość typu {msg.type}]"
+        # A photo (or other non-text message) shows as its type, with its caption if it has one.
+        if msg.type == "text" and msg.body:
+            text = msg.body
+        elif msg.type == "voice" and msg.body:
+            # The transcript (voice.py): the model knows a misheard number is possible.
+            text = f"[wiadomość głosowa, transkrypcja] {msg.body}"
+        else:
+            text = " ".join(filter(None, [f"[wiadomość typu {msg.type}]", msg.body]))
         if msg.direction == "in":
             turns.append({"role": "user", "content": text})
         elif turns:
@@ -45,18 +52,10 @@ def to_llm_messages(history: list[Message]) -> list[dict]:
     return turns
 
 
-def split_at_last_bot_message(history: list[Message]) -> tuple[list[Message], list[Message]]:
-    """(context, new): new is everything after the bot's last message, i.e. the report the
-    trainee is sending now; context is the rest. Without a bot message, everything is new."""
-    for i in range(len(history) - 1, -1, -1):
-        if history[i].direction == "out":
-            return history[: i + 1], history[i + 1 :]
-    return [], history
-
-
-def reply_input(settings: Settings, history: list[Message]) -> list[dict]:
-    """The chat turns for a reply call, shaped by HISTORY_MODE (see config.py)."""
-    context, new = split_at_last_bot_message(history)
+def reply_input(settings: Settings, context: list[Message], new: list[Message]) -> list[dict]:
+    """The chat turns for a reply call: `new` (from the first message still waiting, see
+    conversation.Turn) after `context` (already handled), with the marker between them; shaped
+    by HISTORY_MODE (see config.py). Without context, everything is new and there's no marker."""
     context_turns = to_llm_messages(context)
     if settings.history_mode == "new_only" or not context_turns:
         return to_llm_messages(new)
@@ -117,6 +116,11 @@ def _complete(
     # The SDK default is 10 minutes and 2 retries; the trainee is waiting for the reply.
     client = openai.OpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1)
     messages = list(messages)
+    log.debug("Instructions for the model:\n%s", instructions)
+    log.debug(
+        "Messages for the model:\n%s",
+        "\n".join(f"[{m['role']}] {m['content']}" for m in messages),
+    )
     for attempt in range(1, ATTEMPTS + 1):
         response = client.responses.create(
             model=settings.openai_model,
@@ -142,6 +146,7 @@ def _complete(
                     return LlmOutput(reply=REFUSAL, weight=None, training=None)
 
         raw = response.output_text
+        log.debug("Model's answer (attempt %d): %s", attempt, raw)
         if not raw:
             raise RuntimeError(f"Empty response ({response.status}: {response.incomplete_details})")
         try:
@@ -167,16 +172,21 @@ def _complete(
 
 
 def generate_reply(
-    settings: Settings, trainee: Trainee, history: list[Message], now: datetime
+    settings: Settings,
+    trainee: Trainee,
+    context: list[Message],
+    new: list[Message],
+    now: datetime,
 ) -> LlmOutput:
-    """Reply to the trainee's latest message (the last entry of history) and extract the
-    weight and training it reports. The trainee's name and plan go into the prompt."""
+    """Reply to the trainee's new messages (conversation.Turn: the ones still waiting, `context`
+    the handled ones before them) and extract the weight and training they report. The trainee's
+    name and plan go into the prompt."""
     plan = plans.of(trainee)
     return _complete(
         settings,
         build_instructions(plan, trainee.name),
         [
-            *reply_input(settings, history),
+            *reply_input(settings, context, new),
             # Per-request context goes after the history so the prefix stays cacheable.
             {"role": "developer", "content": _today(trainee, now)},
         ],

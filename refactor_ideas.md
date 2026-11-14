@@ -1,6 +1,8 @@
-# Refactor ideas – technical debt review (2026-11-04)
+# Refactor ideas – technical debt review (2026-11-13)
 
-How this was checked: I read every module, template, script, migration and test, then ran the test suite (183 pass), `ruff check` (clean) and `ruff format --check` (clean). I reproduced the suspected bugs with a probe script on a scratch database; `wabot.db` and `simulated_month.db` were only read. Nothing in the code was changed.
+How this was checked: I read every module, template, script, migration and doc, and ran the test suite (264 pass), `ruff check` and `ruff format --check` (both clean) and `alembic check` (no drift between the models and the migrations). I reproduced the suspected bugs with probe tests on a temporary database (the project's own test fixtures, run from a scratch folder). `wabot.db` and `simulated_month.db` weren't opened, OpenAI wasn't called, and no project file but this one was changed.
+
+This replaces the review of 2026-11-04 (it's in git history). What it left open was checked again: still-open items are carried over below with their old number, e.g. "(2026-11-04: 1.2)", and fixed ones are listed at the end.
 
 **Verified** means I reproduced it. The other findings come from reading the code.
 
@@ -9,313 +11,219 @@ Priorities:
 - **P2** – fix before the feature that builds on it, or before production.
 - **P3** – cleanup.
 
-## Fixed so far (2026-11-04, the quick fixes)
-
-- **1.1** – bot messages before the trainee's first one go to the model as a developer note, so it sees the reminder it's answering.
-- **1.3** – letters that are in the trainee's name or messages are allowed in the reply.
-- **1.4** – the OpenAI client has a 60 s timeout and one retry (only that part of 1.4).
-- **2.1 and 2.2** – `trainees.training_plan` (a copy of the current plan) is replaced by `trainees.plan_version_id`, a pointer to the trainee's own version; each check-in points to the version it was checked against (`training_checkins.plan_version_id`). Both are two-column foreign keys, so the database refuses another trainee's version. Migration 0007, tested on rows in the old shape and on copies of both local databases.
-- **2.3** – decided: a trainee never moves to another trainer. `add_trainee.py --trainer` refuses to change an existing trainee's trainer; the library shows only the trainer's current trainees and `current_version()` filters by trainer, as a safeguard.
-- **2.5** – a restore or assign that changes nothing adds no version ("Podopieczny ma już ten plan z biblioteki").
-- **2.6** – `tests/test_schema.py` fails when an ID disappears (`tests/catalog_ids.txt`).
-- **3.1 (dev login only)** – settings refuse `DASHBOARD_DEV_LOGIN` on Cloud Run (`K_SERVICE` set).
-- **3.4 (three of them)** – IDs compared instead of identity, `DEFAULT_TIMEZONE` instead of a hard-coded zone, the editor still warns about unsaved changes after a failed save.
-- **4.1** – `tests/test_schema.py` runs the migrations on an empty database and compares them with the models, plus downgrade and upgrade again.
-- **5.1** – tests don't read `.env`.
-- **6.1** – simulated entries are saved at the simulated time.
-- **6.2** – `simulate_month.py` deletes the `-wal`/`-shm` files too, and says to stop the dashboard when the file is in use.
-- **8** – the out-of-date lines in PLAN.md.
-
-Still open: everything else below, notably 1.2 (the "handled" state), 2.7, 3.1's proxy and session points, 4.2.
-
 ## Top of the list
 
 | # | Problem | Priority |
 |---|---|---|
-| 1.1 | The bot never sees its own message when the trainee answers it (reminders, first messages) – verified | P1 |
-| 1.2 | "Already handled" is guessed from the bot's last outgoing message: a failed send duplicates a report, an apology loses one – verified | P1 |
-| 2.3 | A trainee moved to another trainer: the old trainer's library still shows them by name; the new trainer sees none of their history – verified | P1 (the leak) / P2 |
-| 5.1 | Tests read your `.env`, so their result can depend on your local settings | P2 |
-| 2.1 | The current plan is stored twice (`trainees.training_plan` and the newest `trainee_plans` row), and they can disagree – verified | ✅ fixed |
-| 2.2 | Check-ins don't record which plan version they were saved against | ✅ fixed |
-| 1.3 | A non-Latin letter in a reply (e.g. a Ukrainian name) makes every reply fail – verified | P2 |
-| 2.6 | "Exercise IDs are permanent" isn't enforced; renaming one breaks every plan that uses it | P2 |
-| 4.1 | No test runs the migrations | P2 |
-| 3.1, 1.4, 4.2 | Production gaps: proxy/HTTPS cookie, dev login guard, async webhook doing sync DB work, no LLM timeout, Postgres readiness | P2 (before milestone 7) |
+| 1.1 | "Already handled" is guessed from the bot's last message: a failed send duplicates a report, an apology loses one, and on Telegram so does a `/start` in between – verified | ✅ fixed (2026-11-13) |
+| 1.2 | One reply saves at most one weight and one training: "sobota A, niedziela B" keeps one of them | P2 (milestone 4) |
+| 1.3 | Photos and voice messages get no answer, and "yanek 80,4" as a photo caption is dropped – verified | P2; captions ✅ fixed |
+| 1.4 | A stored plan that no longer validates: no reply at all, not even the apology (came in with the logging change) – verified | ✅ fixed |
+| 2.1 | Local Telegram depends on the tunnel and Telegram's DNS (today's missing answers); polling needs neither | P2 (development) |
+| 2.2 | A number registered without the country code can never connect on Telegram | P2 (with "Dodaj podopiecznego") |
+| 3.1 | Editing a plan in two tabs drops the other change and links the version to the wrong library plan – verified | P3 |
+| 4 | Production: background replies on Cloud Run, sync database work in async webhooks, HTTPS behind the proxy, sessions, Postgres, logs with health data | P2 (milestone 7) |
 
 ---
 
 ## 1. The bot's conversation flow
 
-### 1.1 The bot doesn't see its own message when the trainee answers it (verified, P1) – ✅ fixed
+### 1.1 "Already handled" is guessed from the bot's last message (verified, P1) – ✅ fixed (2026-11-13)
 
-`assistant.to_llm_messages()` (`src/wabot/assistant.py:34`) drops bot turns at the start of the history ("the conversation must start with the trainee"). When the bot's message is the first one in the 24 h window, it is dropped. That's exactly the case of a reminder, or of a message sent with `send_test_custom_first_message.py`.
+**Built:** `messages.handled_at` (migration 0011, older messages marked by the old rule) and `conversation.Turn`: a reply reads the messages still waiting as new and marks them handled in the save's transaction. A failed LLM call or save leaves them waiting, a failed send leaves them handled, `/start` and the shared number are handled at once. Each failure mode below has a test (`test_webhook.py`, `test_telegram.py`). The design of the conversation handling, with what's left for milestone 4, is in docs/CONVERSATION.md. Still open from the fix below: storing failed sends with a status, and the safety-net sweep for replies lost in a restart (section 4).
 
-- **Probe:** the history [bot: "Jak dziś z dietą?", trainee: "yanek dobrze, bez odstępstw"] sends the model only `[{'role': 'user', 'content': 'yanek dobrze, bez odstępstw'}]`.
-- **Why it matters:** the "Reply to a reminder" case in PLAN.md depends on the model seeing the question, and milestone 5 (reminders) is built on it.
-- **Fix:** this rule is probably left over from Anthropic's API, which required the first message to be a user turn. Check whether OpenAI's Responses API needs it; if not, remove the loop. If it does, turn the leading bot messages into a developer note ("Twoja wcześniejsza wiadomość: …") instead of dropping them. Add a test for a reply to a bot-started message.
+What it was:
 
-### 1.2 "Already handled" is guessed from the bot's last outgoing message (verified, P1)
+Unchanged since the last review. The marker "--- NOWE WIADOMOŚCI ---", and with it "extract only what's new", goes after the bot's last stored message (`assistant.split_at_last_bot_message()`), so:
 
-The marker, and with it "extract only what's new", goes after the bot's last stored outgoing message (`assistant.split_at_last_bot_message`). Two failure modes follow:
+- **A reply that fails to send duplicates the report.** Nothing is stored, so the report is below the marker again on the next "yanek" and saved twice.
+- **An apology loses the report.** The apology is stored as a bot message, the report moves above the marker, and the prompt says everything above was already saved.
+- **New on Telegram: every fixed text the bot stores moves the marker too.** The help after `/start` and the welcome after connecting are stored as bot messages (so the model knows what it told the trainee).
+  - **Probe:** "waga 80,4" (no "yanek"), then "/start", then "yanek zapisz". The model got:
+    ```
+    user      | waga 80,4
+    user      | /start
+    assistant | Wysyłaj mi raporty, zaczynając wiadomość od „yanek” …
+    developer | --- NOWE WIADOMOŚCI --- …
+    user      | yanek zapisz
+    ```
+    The weight is above the marker, so the model is told it's already saved, and it's lost.
 
-- **A reply that fails to send duplicates the report.** No outgoing message is stored, so on the next "yanek" call the report that was already saved is below the marker again.
-  - **Probe:** "yanek 80 kg" (the send fails), then "yanek a co jutro?". The second LLM call got both messages as new, and two weight rows were saved.
-- **An apology loses the report.** The apology (after the LLM call or the save failed, `main.py:88`) is stored as a bot message. The report before it moves above the marker, and the prompt tells the model "wcześniejsze zgłoszenia zostały już zapisane". The apology says "spróbuj za kilka minut", but "yanek, spróbuj jeszcze raz" won't extract it again. The report is lost unless the trainee types it again.
+**Fix (as before):** an explicit state. Inbound messages get `handled_at` (set when the reply that covered them was saved and sent); the marker goes after the last *handled* message, so failed sends, apologies and fixed texts don't move it. It's also the base milestone 4 (corrections) needs. Recommended before milestone 4.
 
-**Fix:** make the state explicit.
-- **Mark handled messages:** give inbound messages a `handled_at` column (or `handled_by_message_id`). Set it when a report from the message was saved, or when a later message covered it (`asked_again`).
-- **Move the marker:** put it after the last *handled* message instead of the last outgoing one. Failed sends and apologies then don't move it.
-- **Store failed sends too,** with a status (see 1.5), so the history shows what the trainee did and didn't get.
-- **Safety net for lost replies** (1.4): find messages that mention yanek and aren't handled after a few minutes.
+### 1.2 One reply saves at most one weight and one training (P2, milestone 4)
 
-This is also the base milestone 4 (corrections) needs.
+`LlmOutput` has `weight: Weight | None` and `training: Training | None`. A trainee catching up after a weekend ("w sobotę A, w niedzielę B", "pon 80,2, wt 79,9") reports two days, and only one of them can be saved. The prompt doesn't say what to do with the rest, so the model either drops one without a word or, worse, says "zapisałem oba". The database already takes any number of rows per day; only the schema limits it.
 
-### 1.3 A non-Latin letter in the reply makes every reply fail (verified, P2) – ✅ fixed
+- Not verified with the real model (no OpenAI calls in this review). A weekend catch-up in one of `scenarios/*.yaml` would show what it does.
+- **Fix:** `weights: list[Weight]` and `trainings: list[Training]` in `llm_output.py`, each item validated as now, and `entries.save()` looping over them. Until then, a prompt rule: save the newest day and ask the trainee to send the others separately.
 
-`_foreign_letters()` (`src/wabot/llm_output.py:88`) rejects any letter that isn't Latin script.
+### 1.3 Photos, voice messages and captions get no answer (verified, P2) – ✅ captions fixed (2026-11-13)
 
-- **Probe:** a reply of "Dzięki, Олена!" is rejected with "reply contains non-Polish letters 'Оаелн'". After the one retry the trainee gets the apology.
-- **Why it matters:** the same happens to a trainee registered as "Олена", or one who sometimes writes in Ukrainian. Trainers in Poland will have such clients.
-- **Fix:** allow letters that appear in the trainee's name and in their own messages (pass them to `validate_output()`). Or make it a logged warning instead of a validation error.
+`telegram.parse_update()` and `whatsapp.parse_messages()` keep text only for text messages. A photo's caption is dropped, so "yanek" in it isn't seen.
 
-### 1.4 Webhook and reply handling for production (P2)
+- **Probe:** a linked trainee sends a photo with the caption "yanek waga 80,4". It's stored as `photo` with no text, the LLM isn't called, nothing is sent.
+- **PLAN.md** ("What the bot handles" → Photo) says the MVP replies that photos aren't supported yet and processes the caption like a normal message. That isn't built.
+- **Why it matters on Telegram:** a photo of the scale with "yanek 80,4" and voice messages are what people actually send. Today they get silence, which looks like the bot is broken.
+- **Fix:** the caption is the text (Telegram `message.caption`; WhatsApp `image.caption`, `video.caption`, `document.caption`), so the rest of the flow works unchanged. A non-text message that has no caption gets a fixed reply ("Na razie czytam tylko tekst – napisz proszę raport"): every voice message from a trainee, and a photo when the bot was mentioned recently. In the history, `to_llm_messages()` can show "[zdjęcie] <caption>".
 
-- **Sync database work on the event loop.** `receive_webhook` is `async def` (`src/wabot/main.py:48`), but it does the trainee lookup and the commits synchronously on the event loop. While it waits for the database (up to SQLite's 5 s busy timeout, or a Postgres round trip), nothing else in the process is served. Keep it async for `await request.body()`, and run the storing part with `run_in_threadpool`.
-- **Replies run as `BackgroundTasks` in the same process.** A restart between the 200 and the reply loses that reply without a trace. Cloud Tasks is the plan (PLAN.md). Until then, 1.2's `handled_at` makes a sweep possible.
-- **No timeout on the OpenAI client** (`assistant.py:108`). The SDK default is 10 minutes with 2 retries, so a hung call keeps the trainee waiting and holds a worker. Set something like `timeout=60, max_retries=1`.
-- **No retries on sending:** `whatsapp.send_text` doesn't retry Meta's 429/5xx. P3.
+### 1.4 A plan that no longer validates: no reply at all (verified, P2) – ✅ fixed (2026-11-13)
 
-### 1.5 Delivery failures aren't linked to the stored message (P2, with reminders)
+`main.reply()` now calls `plans.of(trainee)` for the "Answering … plan: …" log line, and that's before the `try`. Before, the first `plans.of()` was inside `generate_reply()`, inside the `try`, so the trainee got the apology and the error was logged as "LLM call … failed".
 
-`whatsapp.failed_statuses()` is only logged. The bot's message stays in the history as if it was delivered, for example after error 131047 outside the 24 h window. So the model "remembers" telling the trainee something they never got.
-- **Fix:** store the delivery status on the message, looked up by its wamid (`messages.status`).
-- **Check the window before sending:** nothing on the send path checks `in_service_window()` today (`conversation.py:81`). Reminders must check it and use templates outside the window.
+- **Probe:** a plan version with an exercise ID that isn't in the catalog. `reply()` raises `ValidationError`, nothing is sent, and the error is only in uvicorn's traceback.
+- **When it can happen:** a catalog ID removed (`tests/test_schema.py` guards against that), or a new rule in `plans.py` that older stored plans break (e.g. a shorter label limit).
+- **Fix:** log `trainee.plan_version_id` without validating the plan, or catch the error in the log line's summary; plus a test.
 
-### 1.6 Smaller
+### 1.5 Smaller
 
-- **The trigger is Y-only (verified).** "Janek" (the usual Polish spelling), "Jankowi" and "Yanuś" don't trigger the bot (`conversation.py:19`). Probably on purpose, so a real Janek in the chat doesn't set it off. Decide it, and tell trainees the exact spelling. Product question.
-- **First messages use the full report schema.** `generate_first_message()` validates weight and training it then throws away, so a stray training in the output can fail validation for nothing. A schema with only `reply` fits. P3.
-- **Logs contain health data.** For example `Saved weight from …: {"kg":82.4,…}` (`main.py:143`) and the invalid-output warnings, which include values. Fine locally. In Cloud Logging it is health data under GDPR, with its own retention. Log IDs, not values, before production. P2 (production).
+- **Lists in plan answers on Telegram (P3, not verified).** The prompt asks for the plan as one exercise per line with bold day names. Telegram's legacy Markdown has no lists. A model that writes "* Przysiad …" bullets pairs those asterisks: two bullets make bold text across lines, and an odd number fails parsing, so the whole message goes out with literal asterisks. "Jaki jest mój plan?" is exactly this case. One real plan answer in `wabot.db` (2026-11-03) had no bullets (bold day name, one exercise per line), so it may never happen; if bullets show up in the DEBUG log, turn "* " at the start of a line into "• " in `llm_output._to_whatsapp_format()`.
+- **Silence for messages without "yanek" (product, P3).** In a private chat, "waga 80" gets nothing back. That's the design (several messages, then "yanek, zapisz"), but a new trainee will think the bot is broken. Telegram can react to a message (`setMessageReaction`, e.g. ✍), a cheap "saved, waiting for yanek" sign. Decide together with the trigger spelling below.
+- **Still open (2026-11-04: 1.6):** the trigger is Y-only ("Janek" doesn't work); first messages are validated against the whole report schema; logs contain health data. There's more of the latter now: INFO lines carry trainees' names, DEBUG the texts and the whole prompt. That's fine locally (`logs/` is gitignored), but it's P2 for production.
 
 ---
 
-## 2. Data model
+## 2. Telegram and local development
 
-### 2.1 The current plan is stored twice (verified) – ✅ fixed (migration 0007)
+### 2.1 Local Telegram depends on the tunnel and Telegram's DNS (P2, development)
 
-`trainees.training_plan` (what the bot reads) and the newest `trainee_plans` row are meant to be the same, but nothing enforces it. The code already works around this with `trainee.training_plan is not None` checks in `plan_pages.py` and `plan.html`.
+Today's missing answers: Telegram refused every `setWebhook` for the new tunnel ("Failed to resolve host"), and the messages waited at Telegram. `set_webhook.py` now waits until the name is in public DNS before registering. That's not verified yet: the next `run.sh` start shows whether it's enough.
 
-Bugs from it, both verified:
-- **An identical edit leaves the trainee without a plan.** `add_trainee.py --no-plan` sets the column to null directly (`scripts/add_trainee.py:107`). If the trainer then saves a plan equal to the last version, `assign()` compares it with that version (`plan_history.py:46`), not with the column. It reports "Plan bez zmian" and the trainee stays without a plan.
-  - **Probe:** "version added: None | trainee has a plan: False".
-- **A new trainee registered with `--no-plan` gets the example plan in their history:** it's assigned, then removed.
+More robust for local work: **long polling**. A small script calls `getUpdates` and posts each update to `http://localhost:8000/telegram/webhook` with the secret header. That's the same code path as the webhook, with no tunnel, no DNS and nothing to register. Telegram allows either a webhook or `getUpdates`, so the script calls `deleteWebhook` first. `run.sh` would use it on Telegram and keep the tunnel for WhatsApp; production keeps the webhook.
 
-**Decided (2026-11-04): Kasia's row points to her current version.** `trainees.training_plan` (the whole plan copied again) becomes `trainees.plan_version_id`, a foreign key to `trainee_plans.id`. The plan itself is stored once, in `trainee_plans`.
-- **The bot** reads the plan of the version the pointer names.
-- **No plan:** the pointer is null; the history stays as it is.
-- **Only her own versions:** a two-column foreign key, (`plan_version_id`, `id`) → `trainee_plans` (`id`, `trainee_id`), so the database refuses a pointer to another trainee's version.
-- **`plan_history.assign()`** adds the version and moves the pointer, in one transaction; removing a plan sets it to null.
-- **Migration:** each trainee with a plan points to their newest version; then the JSON column is dropped.
-- **Built 2026-11-04** together with 2.2. `plan_history.remove()` replaces setting the column to null.
+### 2.2 Numbers without the country code never match (P2 with "Dodaj podopiecznego") – still open (2026-11-04: 3.5)
 
-### 2.2 Check-ins don't record which plan they were saved against – ✅ fixed (migration 0007)
+`normalize_phone("792 541 888")` returns `"792541888"` and accepts it. Telegram always sends the whole number (`48792541888`), so a trainee registered like that can never connect: every press of the button answers "Ten numer nie jest zarejestrowany". The same goes for "0048…".
 
-`training_checkins.plan_day` is the day's name as text. `missed_exercises` and `status` were computed from the plan as it was at that moment. Plan versions now exist, so a check-in can point at one.
-- **Fix:** add `training_checkins.plan_version_id`, the version that was current when the check-in was saved.
-- **What it gives the calendar:** it can show the right day and "4/5, brak: plank" after the plan changes.
-- **Day IDs:** ✅ built 2026-11-04 (migration 0008). Every plan day has an ID that stays through renames and copies, and check-ins store it (`plan_day_id`).
+Today only `add_trainee.py` registers trainees, and its help says "with country code". The dashboard's form will make it common.
 
-### 2.3 Moving a trainee to another trainer (verified, P1 for the leak) – ✅ fixed: decided that a trainee never moves
+**Fix:** in `normalize_phone()`, put 48 before 9 digits and drop a leading 00 (or require the "+" form). Separately, as noted before, registering a number another trainer already has must fail without saying whose it is.
 
-`add_trainee.py --trainer` (`scripts/add_trainee.py:101`) changes only `trainees.trainer_id`. Their messages, entries and plan versions keep the old trainer's ID. As a result:
+### 2.3 Smaller
 
-- **The new trainer sees nothing of the past.** `history()` and `current_per_day()` filter by the trainee's current trainer, so no weights and no plan history show up.
-  - **Probe:** "Ewa sees history versions: 0".
-- **The old trainer still sees the trainee's name.** Their library lists the trainee as using one of their plans, with a link that answers 404.
-  - **Probe:** Marek's library lists Kasia, who now belongs to Ewa.
-  - **Cause:** `users_of()` (`src/wabot/dashboard/plan_pages.py:52`) takes each trainee's newest version among the old trainer's rows and never checks who the trainee belongs to now.
-- **An edit by the new trainer links to the old trainer's library.** It copies `template_id` from the old trainer's library plan, because `current_version()` doesn't filter by trainer.
-
-**Fix now:**
-- **`users_of()`:** join `Trainee` and filter on the trainee's current trainer.
-- **`current_version()`:** filter by trainer like `history()` does.
-
-**Decided (2026-11-04): a trainee never moves to another trainer.** `add_trainee.py --trainer` now refuses for an existing trainee, and the dashboard won't offer it.
-
-### 2.4 Library plan names aren't case-insensitive for Polish letters (verified, P3)
-
-`name_error()` (`plan_pages.py:71`) compares with SQL `lower()`, but SQLite's `lower()` lowercases only A–Z.
-- **Probe:** `lower('ŁYDKI Ćwiczenia')` = `'Łydki Ćwiczenia'`.
-- **Result:** "Łydki" and "łydki" can both exist on SQLite, and Postgres would refuse the second. Separately, the database's unique constraint is case-sensitive, and two simultaneous saves of the same name give an IntegrityError (500).
-- **Fix:** add a `name_key` column (casefolded, spaces collapsed, the same `_key()` as `plans.py`) with the unique constraint on (`trainer_id`, `name_key`). Catch the IntegrityError and show the same Polish message.
-
-### 2.5 Versions that change nothing (verified, P3) – ✅ fixed
-
-Restoring a version equal to the current plan, or assigning a library plan the trainee already has unchanged, adds a version.
-- **Probe:** the history went from 3 versions to 4.
-- **Fix:** skip it when the plan, template and name are all unchanged, the same rule as an edit. Re-assigning after the library plan changed still adds one.
-
-### 2.6 "Exercise IDs are permanent" isn't enforced (P2) – ✅ test added
-
-Every stored plan, library plan and version is validated against the catalog whenever it's read (`plans.of()`, `TrainingPlan.model_validate(version.plan)`). Renaming or removing one ID in `exercises.yaml` makes every plan that uses it invalid. The bot then apologizes on every message from those trainees, and the plan pages answer 500. A test with a snapshot of the IDs, failing when one disappears, prevents it.
-
-### 2.7 The catalog is a type built at import (P2, decide before Ćwiczenia)
-
-`ExerciseId = Literal[IDS]` (`src/wabot/exercises.py:48`) works for one shared YAML catalog. Trainers' own exercises, stored per trainer in the database, can't be a fixed type:
-- **Checks:** validation needs the trainer's set (pydantic validation context).
-- **Editor:** the dropdowns need the trainer's list.
-- **LLM schema:** its enum must be built per request, or dropped. The plan's IDs are already in the prompt, and `validate_output()` checks them anyway.
-
-`plans.py`, `llm_output.py` and `plan_editor.py` all assume the fixed type, so design this before building Ćwiczenia.
+- **`WHATSAPP_TEST_RECIPIENT` is "your number" on both channels.** You hit it today ("No number: pass --phone or set WHATSAPP_TEST_RECIPIENT", while on Telegram). Rename it to `TEST_PHONE`, accepting the old name too (pydantic `validation_alias=AliasChoices(...)`). P3.
+- ✅ fixed: **`send_test_custom_first_message.py --to "+48 …"`** doesn't normalize the number, unlike `add_trainee.py` and `send_test.py`, so it says the number "isn't a registered trainee". P3.
+- **The dashboard doesn't show who has connected on Telegram.** CODE_EXPLANATION lists this under "Not built yet". With the share-your-number step it's the first thing a trainer needs ("why doesn't Ania get answers?"): a column on Podopieczni. P3.
 
 ---
 
 ## 3. Dashboard
 
-### 3.1 Sign-in in production (P2, production)
+### 3.1 Editing a plan in two tabs drops the other change (verified, P3)
 
-- **HTTPS behind Cloud Run's proxy.** The app sees plain http there. `secure=request.url.scheme == "https"` (`src/wabot/dashboard/auth.py:54`) then sets the session cookie without Secure, and `url_for("google_login")` gives Google an `http://` login URI. Run uvicorn with `--forwarded-allow-ips='*'` on Cloud Run, or take both from config.
-- **Dev login in production.** `DASHBOARD_DEV_LOGIN=True` there would let anyone sign in as any trainer. Without `DASHBOARD_SESSION_SECRET`, the cookie key is also the public `DEV_SECRET` (`auth.py:31`). Refuse to start with dev login on Cloud Run (`K_SERVICE` is set).
-- **Sessions can't be revoked.** They last 30 days. Removing a trainer's email doesn't sign them out, because `current_trainer()` only checks that the trainer exists (`auth.py:80`). Check the email there, or keep a `session_version` in the cookie.
-- **No CSRF tokens.** SameSite=Lax already stops other sites' POSTs in current browsers, which is enough for now. As defense in depth, reject POSTs whose `Origin` isn't the dashboard's. P3.
+- **Probe:** tab 1 opens the editor on plan "Dzień A". Tab 2 assigns the library plan "Biblioteczny". Tab 1 saves with one number changed.
+  ```
+  version 1 script   | template None None          | days ['Dzień A']
+  version 2 template | template 1 'Biblioteczny'   | days ['Full body']
+  version 3 edited   | template 1 'Biblioteczny'   | days ['Dzień A']
+  ```
+  The library plan is replaced without a word. The history calls the result "Biblioteczny (edycja)", and the library lists the trainee as using it, though the content is the old plan.
+- **Cause:** `assign(..., "edited")` takes `based_on` from the version that's current when the form is saved, not from the one the editor was opened on.
+- **Fix:** the editor posts the version it started from (a hidden field). If that version isn't current any more, show the editor again with "Plan zmienił się w międzyczasie" and the typed values.
 
-### 3.2 `users_of()`
+### 3.2 `?month=` out of range: 500 (verified, P3) – ✅ fixed
 
-Besides the leak in 2.3, it calls `session.get(Trainee, …)` once per trainee. Load the trainees in one query.
+`?month=0001-01` and `?month=9999-12` raise ValueError (year 0 / 10000) in `shift()` and the calendar. Only by typing the URL. **Fix:** `month_asked()` treats months outside e.g. 2000–2100 like any bad value.
 
-### 3.3 Structure (P3)
+### 3.3 Still open (2026-11-04)
 
-`routes.py` holds the page renderer and the Jinja filters. `plan_pages.py` imports `render()` from it, and `routes.install()` imports `plan_pages` inside a function to get around the circular import (`routes.py:74`).
-- **Fix:** move `templates`, the `pl_*` filters and `render()` into `dashboard/pages.py`, which both routers import.
-- **Then:** `install()` can live in `dashboard/__init__.py`.
+- **3.1, sign-in in production (P2, production):** HTTPS behind Cloud Run's proxy (`--proxy-headers --forwarded-allow-ips`, or take the scheme from config); sessions can't be revoked (30 days, only the trainer's existence is checked); no Origin check on POSTs.
+- **2.4 (P3):** library plan names are case-insensitive only for A–Z on SQLite ("Łydki" and "łydki" can both exist), and two saves of one name at once answer 500 (IntegrityError).
+- **2.7:** the catalog is a type built at import (`ExerciseId = Literal[IDS]`); decide how trainers' own exercises fit before building Ćwiczenia.
+- **3.3 (P3):** `render()` and the Jinja filters live in `routes.py`, so `install()` imports the other routers inside the function. Move them to `dashboard/pages.py`.
+- **3.4 (P3):** `assign_library_plan` repeats `template_of_trainer`'s check inline; trainers see "skrypt add_trainee" as a source; `?done=` notices come back on reload; two full catalog dropdowns per exercise row; no size limits on the posted plan.
 
-### 3.4 Small things (P3)
+### 3.4 Small new ones (P3)
 
-- **A second ownership check:** `assign_library_plan` repeats `template_of_trainer`'s check inline (`plan_pages.py:194`), because the ID comes from the form. A helper used by both keeps "who may see what" in one place.
-- **Comparing by identity:** `is_current=current is version` (`plan_pages.py:251`) relies on the session's identity map. Compare IDs.
-- **Hard-coded timezone:** trainers have none, so the library shows times in `"Europe/Warsaw"` (`library.html:19`). Use `DEFAULT_TIMEZONE`, or add `trainers.timezone` when there's a settings page.
-- **A developer term on screen:** `plan_history.SOURCES` shows "skrypt add_trainee" to trainers. Change it when registration moves to the dashboard.
-- **Notices that come back:** the `?done=` notice reappears on reload or from a bookmark. A flash cookie fixes it if it bothers anyone.
-- **Editor, after a failed save:** the 422 page starts with `dirty=false`, so leaving loses what was typed without asking. Mark the page dirty when errors are shown.
-- **Editor, with a bigger catalog:** every exercise row has two full catalog dropdowns. With per-trainer catalogs of 100+ exercises, the page grows and picking gets slow; a searchable picker fixes both.
-- **No size limits:** nothing limits the plan's text fields or the posted JSON. Only signed-in trainers can post, so low.
-
-### 3.5 Phone numbers when the dashboard registers trainees (verified, P2 with "Dodaj podopiecznego")
-
-- **Country code:** `normalize_phone("600 123 456")` returns `"600123456"`, accepted without a country code. WhatsApp sends `48600123456`, so that trainee would always get "not registered". Add +48 to 9-digit numbers, or require the + form.
-- **Numbers already taken:** `trainees.phone` is unique across all trainers. Registering a number another trainer already has must fail without saying which trainer has it.
+- **Google's keys aren't cached.** `auth.verify_google_token()`'s comment says they are, but google-auth caches them only with a `CacheControl` session, so every sign-in fetches them. That's fine at this scale; fix the comment, or wrap the session. A network error there (`TransportError`) isn't caught either: 500 instead of "Nie udało się zalogować".
+- **Static files have no version in their URL** (`app.js`, `plan_editor.js`, `app.css`). After a deploy, a browser may run the old script for a while, and an old editor script posts the old JSON shape. Add `?v=<hash>`. Production.
 
 ---
 
-## 4. Database and migrations
+## 4. Production (milestone 7, P2) – mostly still open (2026-11-04: 1.4, 1.6, 3.1, 4.2)
 
-### 4.1 No test runs the migrations (P2) – ✅ test added
-
-`tests/conftest.py:29` creates the tables with `Base.metadata.create_all`, so the migrations are only ever tried by hand. A test could:
-- **Check the schema:** run `alembic upgrade head` on an empty database and compare it with the models, which is what `alembic check` does.
-- **Check downgrades:** downgrade, then upgrade again.
-
-That catches a migration that drifts from `models.py`.
-
-Right now `uv run alembic check` fails, but only because `wabot.db` is at 0005 ("Target database is not up to date"). Both local databases are at 0005; `run.sh` and `run_dashboard.sh` migrate them on their next start.
-
-### 4.2 Before Postgres (milestone 7, P2)
-
-- **No naming convention.** `Base.metadata` has none, so unnamed constraints get names that differ between databases. Migration 0004 already needed `_unique_name()` to guess them. Add `MetaData(naming_convention=...)`.
-- **Squash the migrations.** There's no production data yet, so squash 0001–000N into one baseline migration with the naming convention before the first Postgres deploy. That keeps SQLite's batch-mode workarounds out of production.
-- **JSON type.** `sa.JSON` becomes Postgres `json`, which has no equality operator, so no `=`, `DISTINCT` or `GROUP BY` on plans. Use `JSON().with_variant(JSONB(), "postgresql")`.
-- **Test on Postgres too.** Run the test suite in a Docker container. `lower()`, JSON and timestamps behave differently there, as 2.4 shows.
+- **Background replies on Cloud Run (new).** With request-based billing, Cloud Run throttles the CPU as soon as the response is sent, so a reply running as a `BackgroundTasks` job can stall for minutes or never finish. Move replies to Cloud Tasks (the plan), or turn on "CPU always allocated", before production. A restart between the 200 and the reply still loses the reply (1.1's `handled_at` makes a sweep for those possible).
+- **Sync database work in the async webhooks.** `receive_webhook` and `receive_telegram` are `async def` but do the lookup and the commit on the event loop; while they wait for the database, nothing else is served. Run that part with `run_in_threadpool`.
+- **No retries on sending:** Telegram's 429 (`retry_after`) and Meta's 429/5xx lose the reply.
+- **Postgres:** a naming convention on `Base.metadata`, `JSON().with_variant(JSONB(), "postgresql")`, one squashed baseline migration, the tests run on Postgres too.
+- **Logs:** IDs, not names or values, in INFO lines (1.5).
+- **The WhatsApp verify token is logged.** uvicorn's access log includes the query string, so `GET /webhook?hub.verify_token=…` writes the token into `logs/wabot.log` (checked in uvicorn's code). Low risk: the token only passes Meta's GET check, not the signed POSTs. But it's a secret in a file, and in production's request logs too. P3.
 
 ---
 
-## 5. Tests and tooling
+## 5. Scripts and logging (P3)
 
-### 5.1 Tests read your `.env` (P2) – ✅ fixed
-
-`Settings` reads `.env` (`src/wabot/config.py:10`), and conftest sets only the WhatsApp and OpenAI values. Anything else in your `.env` changes what the tests run with: `HISTORY_MODE`, `DAILY_UPDATES_ONLY`, `GOOGLE_CLIENT_ID`, the `DASHBOARD_*` values. A test can pass or fail depending on your local file.
-- **Fix:** turn the env file off for tests (e.g. `Settings.model_config["env_file"] = None` in conftest, before importing the app), and set what tests need explicitly.
-
-### 5.2 Test helpers
-
-The bot tests give trainees plans by setting `training_plan=` directly: `test_webhook.py:33`, `test_conversation.py:39`, `test_llm_output.py:34`. That's fine for those tests. If 2.1 changes how the plan is stored, move them to one helper.
-
-### 5.3 What isn't tested yet
-
-- the reply to a bot-started message (1.1)
-- the failure paths of 1.2
-- migrations (4.1)
-- that catalog IDs stay (2.6)
+- **`simulate_month.py` writes to the bot's log file.** It imports `wabot.main`, so it opens `logs/wabot.log` like a running `run.sh`. On Windows two processes can't rotate one file: once it reaches 5 MB, every line from either process fails with "--- Logging error ---" on the console and is lost. Give the simulation its own file, like `run_dashboard.sh` does (`LOG_FILE=logs/simulation.log`), or none.
+- ✅ fixed: **`LOG_LEVEL=debug` stops the app at startup (verified).** Lowercase is refused: "Input should be 'DEBUG', 'INFO', 'WARNING' or 'ERROR'". Accept any case with a `field_validator` that uppercases it.
+- **Still open (2026-11-04: 6.3):** `trainees.trainer_named()` finds trainers by name, which isn't unique; only scripts and the simulation use it.
 
 ---
 
-## 6. Simulation and scripts
+## 6. Docs out of date (P3)
 
-### 6.1 Simulated entries are timestamped "now", not in October (verified, P3) – ✅ fixed (rebuild simulated_month.db to see it)
-
-Messages get the simulated time, but `weight_entries` and `training_checkins` take `created_at` from the model default (`models.py:125`).
-- **Data:** in `simulated_month.db` every entry is from 2026-11-04 10:44, while their dates are 2–30 October.
-- **Why it matters:** any dashboard view that shows when something was reported, or uses `created_at` (e.g. the overview's "last report"), will look wrong on the simulation's data.
-- **Fix:** have `entries.save()` take `now` from its caller (`main.reply` already has it).
-
-### 6.2 `simulate_month.py` deletes the database but not its `-wal` / `-shm` files (P3) – ✅ fixed
-
-`simulate_month.py:65` unlinks only the `.db` file. A WAL left by a server that had the old file open can be replayed into the new file. On Windows the unlink simply fails while the dashboard server runs. Delete all three, and when the file is locked, say "stop the dashboard first".
-
-### 6.3 Other
-
-- **Duplicated settings:** `send_test.py` parses `.env` itself and has its own `GRAPH_API_VERSION`. Use `Settings`. P3
-- **Trainers matched by name:** `trainees.trainer_named()` looks trainers up by name, which isn't unique. Only scripts use it; it goes away with the dashboard. P3
+- **CODE_EXPLANATION, Flow 4:**
+  - It says `run.sh` prints "WARNING: set the Callback URL by hand"; it prints "WARNING: the webhook isn't set - see above (tunnel: …)".
+  - "Messages sent before that … are lost" holds only on WhatsApp; Telegram keeps them (README says so).
+- **CLAUDE.md ("Key decisions") and PLAN.md ("The LLM's role"):** "the trainee is resolved server-side from the sender's phone number". On Telegram it's the chat, linked once by the shared number.
+- **"WhatsApp" where it means any messenger:** `weight_chart.js`'s header ("the WhatsApp message it came from"), and CODE_EXPLANATION's "nothing sent to WhatsApp" for the simulation (nothing is sent anywhere).
+- **CODE_EXPLANATION, "Data to look at locally":** gives the manual uvicorn command; `bash run_dashboard.sh` does all of it.
 
 ---
 
-## 7. Code cleanups (P3)
+## 7. Code cleanups (P3) – still open (2026-11-04: 7)
 
-- **Three ways to compare names:** `plans._key` and `exercises._key` (both casefold and collapse spaces), and `name_error`'s `" ".join(name.split())` + `lower()`. Use one helper.
-- **A hidden flush:** `plan_history.assign()` calls `session.add(trainee); session.flush()` first to get IDs, which flushes every pending change of the caller. Document it, or pass the IDs.
-- **Filters that disagree:** `plan_history.history()` filters by trainee and trainer, `current_version()` only by trainee (see 2.3).
-- **A missing trainer filter:** `queries.weigh_ins()` counts reports per day without the trainer filter `current_per_day()` uses. Harmless, but inconsistent.
-
----
-
-## 8. Docs that are out of date (P3) – ✅ fixed
-
-- **`docs/PLAN.md` Decisions table:** "Trainee plans | Free text per trainee". They're built from the catalog now.
-- **`docs/PLAN.md` Architecture:** "AI | … tool use". It's structured output; the read tools are still open.
-- **`docs/PLAN.md` MVP simplifications:** "a small CLI command plus a Firebase Auth user". Sign-in is Google, matched by email, with no Firebase.
-- **`docs/PLAN.md` Core data model:** "Built so far (2026-11-03)" doesn't list `plan_templates` and `trainee_plans`.
+- **Three ways to compare names:** `plans._key`, `exercises._key` (the same function twice) and `name_error()`'s `lower()`.
+- **A hidden flush:** `plan_history.assign()` starts with `session.add(trainee); session.flush()`, which flushes every pending change of the caller.
+- **Counts without the trainer filter:** `queries.weigh_ins()` and `workouts()` count reports per day without it, unlike `current_per_day()`. Harmless, but inconsistent.
 
 ---
 
-## 9. Design decisions to make
+## Fixed on 2026-11-13 (the quick ones)
 
-These aren't bugs, but several later features depend on them.
+- **1.4:** `main.plan_summary()` notes a plan that doesn't validate in the log line instead of raising; the LLM call then fails inside the `try` and the trainee gets the apology (test in `test_webhook.py`).
+- **1.3, the caption half:** a photo's (video's, document's) caption is the message's text on Telegram and WhatsApp, so "yanek" in it gets an answer; the model sees "[wiadomość typu photo] <caption>". Still open: a fixed reply for non-text messages without a caption (voice).
+- **3.2:** `?month=` outside 2000–2100 shows this month.
+- **5:** `LOG_LEVEL` in any case; `send_test_custom_first_message.py` normalizes `--to`.
 
-1. **A "handled" state on inbound messages (1.2).** Retries, reminders and corrections build on it. Recommended before milestone 4.
-2. ~~**One place for the current plan (2.1)**~~ – done: `trainees.plan_version_id` points to the current version.
-3. ~~**Stable day IDs (2.2)**~~ – done: `PlanDay.id`, kept through renames and library copies; check-ins store it (`plan_day_id`).
-4. ~~**Two sessions on one day**~~ – decided 2026-11-04: the newest report of each kind (the plan's, outside the plan: `training_checkins.outside_plan`) is current.
-5. ~~**Moving trainees between trainers (2.3)**~~ – decided: never.
-6. **Trainers' own exercises vs the fixed catalog type (2.7).**
-7. **Trainees who aren't Polish (1.3):** the replies stay Polish, but names and messages in other scripts should work.
-8. **The bot's name spelling (1.6).**
+## Fixed since 2026-11-04 (checked)
+
+- **2.3 / 3.2:** `users_of()` joins the trainee and filters by the trainer, in one query; the old `current_version()` is gone.
+- **6.3:** `send_test.py` uses `Settings`, not its own `.env` parsing.
+- **5.2:** the test helpers give plans through `plan_history`.
+- **The earlier quick fixes:** 1.1, 1.3, 1.4's timeout, 2.1, 2.2, 2.5, 2.6, 3.1's dev-login guard, three of 3.4, 4.1, 5.1, 6.1, 6.2, 8; decided: 2.3 (a trainee never moves).
+
+## Decisions to make
+
+1. ~~**A "handled" state on inbound messages (1.1).**~~ – built 2026-11-13; the rest of the conversation handling (a `ConversationHandler` class, clarifications keep the report waiting, answers without "yanek", lists, corrections against saved entries) is designed in docs/CONVERSATION.md, a draft for review.
+2. **Several days in one report (1.2):** lists in the schema, or a prompt rule for now.
+3. **Non-text messages (1.3):** the caption as text, a fixed reply otherwise. Voice later (transcribing is another OpenAI call per message).
+4. **Local Telegram:** polling or the tunnel (2.1).
+5. **Phone format (2.2):** +48 by default?
+6. **The trigger in a private chat (1.5):** keep "yanek" only, add a reaction, and the spelling ("Janek"?).
+7. **Still open:** trainers' own exercises vs the fixed catalog type (2026-11-04: 2.7).
 
 ## Things in good shape (keep them)
 
+- **The Telegram port:**
+  - Only the sender's own number connects a chat, and a contact card connects nobody.
+  - The bot token never reaches a log or a traceback (TelegramError without the URL; httpx and httpcore stay at WARNING at every level, and tests check both).
+  - The webhook secret is derived from the token, so there's nothing extra to configure.
+  - One history across both channels.
+- **Logging:** `LOG_LEVEL`, a rotating file, and one INFO line per message that answers "did it arrive, did the bot answer, with which plan".
 - **Tenant guards in one place:** the dependencies (`current_trainer`, `trainee_of_trainer`, `template_of_trainer`, `version_of_trainee`), with tests that another trainer gets 404.
-- **Every report kept,** with the newest of the day current. Nothing a trainee sent is overwritten.
-- **Checked LLM output:** structured output, validated with plausibility and plan checks, retried once with the errors.
-- **Plan library copies:** assigning a library plan copies it, so trainees' plans and their saved trainings never change behind them.
-- **Timestamps:** `UTCDateTime` refuses naive datetimes.
-- **Simulation:** the scenarios replay the real reply flow, and a test checks that every column is filled.
+- **Every report kept,** with the newest of the day current; plan versions and day IDs so saved trainings keep their meaning.
+- **Checked LLM output:** structured output, validated, retried once with the errors.
+- **Migrations tested** against the models, with downgrades and the data migrations.
 
 ## Suggested order
 
-1. **1.1 and 1.2, with tests.** They lose or duplicate trainees' data today.
-2. **The `users_of()` / `current_version()` filters (2.3) and `.env` in tests (5.1).** Both are small.
-3. ~~**2.1 and 2.2**~~ – done (2026-11-04).
-4. **The migration test (4.1) and the catalog ID snapshot (2.6).**
-5. **3.1, 1.4 and 4.2 before production.**
+1. ~~**1.4** and **1.3's caption**~~ – done (2026-11-13); 1.3's fixed reply for voice messages is still open.
+2. **Restart `run.sh` to check the DNS fix.** If Telegram refuses again, build 2.1 (polling).
+3. ~~**1.1 (handled state)**~~ – done (2026-11-13); **1.2 (several days)** with milestone 4.
+4. **2.2** before the dashboard registers trainees.
+5. **Section 4** before milestone 7.
 6. **The rest** when you're working on the code it's in.
 
 
+marketing:
+  https://www.instagram.com/proclinic_official

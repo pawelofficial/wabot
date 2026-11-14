@@ -13,13 +13,15 @@
 #   saved:    what the code must save where it differs from the answer: status, missed
 #
 # The trainee and trainer get every field a real one has (tests/test_month_scenario.py
-# checks that none is empty): trainer_email is what the trainer signs in to the dashboard with.
+# checks that none is empty): trainer_email is what the trainer signs in to the dashboard with,
+# telegram_chat_id the trainee's chat with the Telegram bot (as if they had shared their number).
 # The plan goes into the trainer's plan library as plan_name and is assigned from there.
 
 name: Kasia
 trainer: Trener Marek
 trainer_email: marek.trener@example.com
 phone: "48000000001"
+telegram_chat_id: 700000001
 plan: plans/example.yaml
 plan_name: Redukcja – 3 treningi całego ciała
 

@@ -219,8 +219,12 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Local SQLite database
+# Local SQLite databases (scripts/setup_db.py --new) and their backups
 wabot.db*
+*.db
+*.db-wal
+*.db-shm
+db_backups/
 
 # Scratch files that may contain tokens or IDs
 temp.txt
@@ -230,3 +234,6 @@ screen*.png
 # scripts/simulate_month.py output
 simulated_month.db*
 
+
+# Bot logs (logs.py), rotated as wabot.log.1, .2, ...; they contain trainees' messages
+logs/

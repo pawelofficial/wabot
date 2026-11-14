@@ -6,7 +6,7 @@ database for the dashboard); the app itself doesn't use it.
 Each message is stored as the webhook stores it, with the simulated time as created_at, and
 answered by main.reply(), which reads the history, calls the LLM, validates and saves. While
 replaying, main.reply() sees the simulated time as "now", and replies are recorded and stored
-at that time instead of being sent to WhatsApp.
+at that time instead of being sent. Messages are on the active channel (CHANNEL).
 """
 
 import contextlib
@@ -40,6 +40,7 @@ class Scenario:
     trainer: str
     trainer_email: str
     phone: str
+    telegram_chat_id: int  # as if the trainee had shared their number with the Telegram bot
     plan_path: Path
     plan_name: str  # the plan's name in the trainer's library
     reports: list[dict]
@@ -63,6 +64,7 @@ def load(path: Path) -> Scenario:
         trainer=data["trainer"],
         trainer_email=data["trainer_email"],
         phone=str(data["phone"]),
+        telegram_chat_id=int(data["telegram_chat_id"]),
         plan_path=Path(data["plan"]),
         plan_name=data["plan_name"],
         reports=data["reports"],
@@ -91,6 +93,7 @@ def register(scenario: Scenario) -> Trainee:
         trainee = Trainee(
             trainer=trainer,
             phone=scenario.phone,
+            telegram_chat_id=scenario.telegram_chat_id,
             name=scenario.name,
             timezone=scenario.timezone,
             consent_date=dt.date(2026, 10, 1),
@@ -166,6 +169,25 @@ def correct_answer(scenario: Scenario, report: dict) -> dict:
     return out
 
 
+def load_canned(scenarios: list[Scenario] | None = None) -> dict[str, Trainee]:
+    """Add the scenarios' trainers and trainees (with their plans in the trainers' libraries)
+    to the database and replay their month through the bot's reply flow with the correct
+    answers, no OpenAI: what scripts/setup_db.py --simulated adds. Returns the trainees by
+    scenario key."""
+    scenarios = scenarios if scenarios is not None else load_all()
+    settings = main.get_settings().model_copy(update={"openai_api_key": "canned"})
+    registered = {s.key: register(s) for s in scenarios}
+    with (
+        mock.patch.object(main, "get_settings", lambda: settings),
+        Replay() as replay,
+        canned_llm() as canned,
+    ):
+        for at, scenario, report in timeline(scenarios):
+            canned.answers.append(correct_answer(scenario, report))
+            replay.send(registered[scenario.key], report["text"], at)
+    return registered
+
+
 @contextlib.contextmanager
 def canned_llm():
     """OpenAI replaced by a client that returns the answers queued in `.answers`, in order;
@@ -186,7 +208,7 @@ def canned_llm():
 
 class Replay:
     """Sends messages at simulated times. Use as a context manager: inside it, main.reply()
-    runs at the simulated time and its replies go to `self.replies` instead of WhatsApp."""
+    runs at the simulated time and its replies go to `self.replies` instead of the messenger."""
 
     def __init__(self):
         self.now: dt.datetime | None = None
@@ -203,12 +225,13 @@ class Replay:
     def __exit__(self, *exc):
         self._patches.close()
 
-    def _send_and_store(self, settings, trainee, text):
+    def _send_and_store(self, settings, trainee, text, channel=None):
         # As conversation.send_and_store(), but stored at the simulated time and not sent.
         self.replies.append(text)
         with SessionLocal() as session:
             session.add(
                 Message(
+                    channel=channel or settings.channel,
                     direction="out",
                     phone=trainee.phone,
                     type="text",
@@ -219,14 +242,15 @@ class Replay:
                 )
             )
             session.commit()
-        return f"wamid.simulated-out{len(self.replies)}"
+        return f"simulated-out-{len(self.replies)}"
 
     def send(self, trainee: Trainee, text: str, at: dt.datetime) -> int:
         """The trainee sends text at `at` (UTC) and the bot answers. Returns the message's ID."""
         self.now = at
         with SessionLocal() as session:
             message = Message(
-                wamid=f"wamid.simulated-in{trainee.id}-{at:%Y%m%d%H%M%S}",
+                channel=main.get_settings().channel,
+                external_id=f"simulated-in-{trainee.id}-{at:%Y%m%d%H%M%S}",
                 direction="in",
                 phone=trainee.phone,
                 type="text",

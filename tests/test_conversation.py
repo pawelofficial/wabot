@@ -19,16 +19,24 @@ EXAMPLE_PLAN = Path("plans/example.yaml")
 
 
 def add_message(
-    phone: str, direction: str, body: str, age: timedelta, trainee: Trainee | None = None
+    phone: str,
+    direction: str,
+    body: str,
+    age: timedelta,
+    trainee: Trainee | None = None,
+    channel: str = "whatsapp",
+    handled: bool = False,
 ) -> Message:
     with SessionLocal() as session:
         msg = Message(
+            channel=channel,
             direction=direction,
             phone=phone,
             type="text",
             body=body,
             created_at=utcnow() - age,
             trainee_id=trainee.id if trainee else None,
+            handled_at=utcnow() - age if handled else None,
         )
         session.add(msg)
         session.commit()
@@ -68,6 +76,8 @@ def test_service_window_needs_a_recent_inbound_message():
     phone = "48111222333"
     add_message(phone, "in", "hej", age=timedelta(hours=30))
     add_message(phone, "out", "Cześć!", age=timedelta(hours=1))
+    add_message(phone, "in", "z Telegrama", age=timedelta(hours=1), channel="telegram")
+    # WhatsApp's window: a message on Telegram doesn't open it.
     assert not conversation.in_service_window(SessionLocal(), phone, utcnow())
 
     add_message(phone, "in", "82 kg", age=timedelta(hours=2))
@@ -77,10 +87,36 @@ def test_service_window_needs_a_recent_inbound_message():
 def test_send_and_store_saves_the_message(monkeypatch):
     trainee = add_trainee()
     monkeypatch.setattr(conversation.whatsapp, "send_text", lambda *args: "wamid.out1")
-    wamid = conversation.send_and_store(Settings(), trainee, "Hej!")
-    assert wamid == "wamid.out1"
+    external_id = conversation.send_and_store(Settings(channel="whatsapp"), trainee, "Hej!")
+    assert external_id == "wamid.out1"
     history = conversation.recent_history(SessionLocal(), trainee.id, utcnow())
-    assert [(m.direction, m.wamid, m.body) for m in history] == [("out", "wamid.out1", "Hej!")]
+    assert [(m.channel, m.direction, m.external_id, m.body) for m in history] == [
+        ("whatsapp", "out", "wamid.out1", "Hej!")
+    ]
+
+
+def test_send_and_store_on_telegram_needs_the_trainees_chat(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        conversation.telegram,
+        "send_text",
+        lambda settings, chat_id, text, **options: (
+            sent.append((chat_id, text)) or f"tg:{chat_id}:5"
+        ),
+    )
+    trainee = add_trainee()
+    with pytest.raises(conversation.NotOnTelegramError, match="hasn't shared their number"):
+        conversation.send_and_store(Settings(), trainee, "Hej!")  # CHANNEL=telegram by default
+    with SessionLocal() as session:
+        session.get(Trainee, trainee.id).telegram_chat_id = 4242
+        session.commit()
+        trainee = session.get(Trainee, trainee.id)
+    # A reply goes where the message it answers came from, whatever CHANNEL says.
+    settings = Settings(channel="whatsapp")
+    assert conversation.send_and_store(settings, trainee, "Hej!", "telegram") == "tg:4242:5"
+    assert sent == [(4242, "Hej!")]
+    [stored] = conversation.recent_history(SessionLocal(), trainee.id, utcnow())
+    assert (stored.channel, stored.external_id, stored.phone) == ("telegram", "tg:4242:5", PHONE)
 
 
 def test_history_is_the_trainees_own(monkeypatch):
@@ -100,17 +136,51 @@ def test_history_is_the_trainees_own(monkeypatch):
         ([("in", "a, i jeszcze 2 kg mniej")], False),
         ([("in", "yanek sorki, 81")], True),
         ([("in", "kg"), ("in", "yanku, zapisz")], True),
-        # The bot wrote in between (e.g. a reminder): the later message starts a new report.
-        ([("out", "Jak dziś trening?"), ("in", "yanek zrobiony")], False),
+        # Also after a bot message in between (a reminder, an apology): this message is still
+        # waiting, so the later reply reads it too.
+        ([("out", "Jak dziś trening?"), ("in", "yanek zrobiony")], True),
+        ([("out", "Jak dziś trening?")], False),
     ],
 )
-def test_asked_again(later, expected):
+def test_called_again(later, expected):
     trainee = add_trainee()
     first = add_message(PHONE, "in", "yanek 80", timedelta(minutes=5), trainee)
     for i, (direction, body) in enumerate(later):
         add_message(PHONE, direction, body, timedelta(minutes=4 - i), trainee)
     add_message("48999888777", "in", "yanek 64", timedelta(minutes=1))  # someone else
-    assert conversation.asked_again(SessionLocal(), first) is expected
+    assert conversation.called_again(SessionLocal(), first) is expected
+
+
+def test_a_turn_reads_from_the_first_waiting_message():
+    trainee = add_trainee()
+    add_message(PHONE, "in", "yanek 80", timedelta(minutes=9), trainee, handled=True)
+    add_message(PHONE, "out", "Zapisałem 80 kg.", timedelta(minutes=8), trainee)
+    add_message(PHONE, "in", "przysiady 4x8", timedelta(minutes=7), trainee)
+    # The reply to it failed: the apology doesn't make the report count as saved.
+    add_message(PHONE, "out", main.APOLOGY, timedelta(minutes=6), trainee)
+    trigger = add_message(PHONE, "in", "yanek spróbuj jeszcze raz", timedelta(minutes=5), trainee)
+    turn = conversation.load_turn(SessionLocal(), trigger, utcnow())
+    assert [m.body for m in turn.context] == ["yanek 80", "Zapisałem 80 kg."]
+    assert [m.body for m in turn.new] == ["przysiady 4x8", main.APOLOGY, trigger.body]
+    assert len(turn.waiting_ids) == 2
+
+
+def test_without_a_handled_message_the_whole_history_is_new():
+    trainee = add_trainee()
+    add_message(PHONE, "out", "Jak dziś z dietą?", timedelta(minutes=9), trainee)  # a reminder
+    trigger = add_message(PHONE, "in", "yanek dobrze", timedelta(minutes=5), trainee)
+    turn = conversation.load_turn(SessionLocal(), trigger, utcnow())
+    # The bot's message before the first waiting one is context (the model sees what's answered).
+    assert ([m.body for m in turn.context], [m.body for m in turn.new]) == (
+        ["Jak dziś z dietą?"],
+        ["yanek dobrze"],
+    )
+
+
+def test_a_handled_message_gets_no_reply_of_its_own():
+    trainee = add_trainee()
+    message = add_message(PHONE, "in", "yanek 80", timedelta(minutes=5), trainee, handled=True)
+    assert conversation.not_answered_because(SessionLocal(), message) is not None
 
 
 def test_reply_without_api_key_sends_apology(client, monkeypatch):
@@ -309,21 +379,23 @@ REPORTED = chat(
     ("in", "przysiady 4x8"),
     ("in", "yanek zapisz"),
 )
+# As conversation.load_turn() splits it: the first report was handled, the rest waits.
+CONTEXT, NEW = REPORTED[:2], REPORTED[2:]
 
 
 def is_marker(turn: dict) -> bool:
     return turn["role"] == "developer" and "NOWE WIADOMOŚCI" in turn["content"]
 
 
-def test_marked_history_puts_the_marker_after_the_bots_last_message():
-    turns = assistant.reply_input(Settings(), REPORTED)
+def test_marked_history_puts_the_marker_before_the_new_messages():
+    turns = assistant.reply_input(Settings(), CONTEXT, NEW)
     assert [t["content"] for t in turns if not is_marker(t)] == [m.body for m in REPORTED]
     assert is_marker(turns[2])
     assert sum(is_marker(t) for t in turns) == 1
 
 
 def test_new_only_history_keeps_just_the_new_report():
-    turns = assistant.reply_input(Settings(history_mode="new_only"), REPORTED)
+    turns = assistant.reply_input(Settings(history_mode="new_only"), CONTEXT, NEW)
     assert turns == [
         {"role": "user", "content": "przysiady 4x8"},
         {"role": "user", "content": "yanek zapisz"},
@@ -331,16 +403,16 @@ def test_new_only_history_keeps_just_the_new_report():
 
 
 @pytest.mark.parametrize("mode", ["marked", "new_only"])
-def test_without_a_bot_message_everything_is_new_and_unmarked(mode):
+def test_without_context_everything_is_new_and_unmarked(mode):
     history = chat(("in", "82"), ("in", "yanek zanotuj"))
-    turns = assistant.reply_input(Settings(history_mode=mode), history)
+    turns = assistant.reply_input(Settings(history_mode=mode), [], history)
     assert [t["content"] for t in turns] == ["82", "yanek zanotuj"]
 
 
 def test_a_reply_to_a_message_the_bot_started_shows_the_model_that_message():
     # A reminder is the first message of the window: the model still sees what was asked.
     history = chat(("out", "Jak dziś z dietą?"), ("in", "yanek dobrze, bez odstępstw"))
-    turns = assistant.reply_input(Settings(), history)
+    turns = assistant.reply_input(Settings(), history[:1], history[1:])
     assert turns[0]["role"] == "developer" and "Jak dziś z dietą?" in turns[0]["content"]
     assert is_marker(turns[1])
     assert turns[2] == {"role": "user", "content": "yanek dobrze, bez odstępstw"}
@@ -354,7 +426,7 @@ def test_reply_call_sends_the_marked_history(monkeypatch):
         return None
 
     monkeypatch.setattr(assistant, "_complete", fake_complete)
-    assistant.generate_reply(Settings(), unsaved_trainee(), REPORTED, utcnow())
+    assistant.generate_reply(Settings(), unsaved_trainee(), CONTEXT, NEW, utcnow())
     assert is_marker(sent["messages"][2])
     assert sent["messages"][-1]["content"].startswith("Dzisiaj jest")
 
@@ -367,7 +439,7 @@ def test_today_is_the_trainees_local_date(monkeypatch):
 
     monkeypatch.setattr(assistant, "_complete", fake_complete)
     late_evening_utc = dt.datetime(2026, 11, 3, 23, 30, tzinfo=dt.UTC)
-    assistant.generate_reply(Settings(), unsaved_trainee(), REPORTED, late_evening_utc)
+    assistant.generate_reply(Settings(), unsaved_trainee(), CONTEXT, NEW, late_evening_utc)
     # Already Wednesday in Warsaw.
     assert sent["today"] == dt.date(2026, 11, 4)
     assert sent["last"] == "Dzisiaj jest środa, 2026-11-04, godz. 00:30."

@@ -1,4 +1,5 @@
-"""Meta WhatsApp Cloud API: webhook parsing, signature checks and sending."""
+"""Meta WhatsApp Cloud API: webhook parsing, signature checks and sending (the counterpart of
+telegram.py; the bot uses one or the other by CHANNEL)."""
 
 import hashlib
 import hmac
@@ -14,12 +15,13 @@ class InboundMessage:
     wamid: str
     phone: str
     type: str
-    text: str | None
+    text: str | None  # a text message's text, or an image's (video's, document's) caption
 
 
 def verify_signature(app_secret: str, body: bytes, header: str | None) -> bool:
-    """Check the X-Hub-Signature-256 header Meta sends with every webhook."""
-    if not header or not header.startswith("sha256="):
+    """Check the X-Hub-Signature-256 header Meta sends with every webhook. Without an app
+    secret nothing passes (anyone could sign with an empty key)."""
+    if not app_secret or not header or not header.startswith("sha256="):
         return False
     expected = hmac.new(app_secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, header.removeprefix("sha256="))
@@ -35,7 +37,12 @@ def parse_messages(payload: dict) -> list[InboundMessage]:
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
             for msg in change.get("value", {}).get("messages", []):
-                text = msg.get("text", {}).get("body") if msg["type"] == "text" else None
+                kind = msg["type"]
+                if kind == "text":
+                    text = msg.get("text", {}).get("body")
+                else:
+                    # A caption counts as the message's text, like on Telegram.
+                    text = (msg.get(kind) or {}).get("caption")
                 messages.append(
                     InboundMessage(wamid=msg["id"], phone=msg["from"], type=msg["type"], text=text)
                 )
