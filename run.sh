@@ -9,6 +9,15 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PORT="${PORT:-8000}"
+
+# Windows lets a second server start on a port that's already taken, and the old one keeps
+# answering (with old code). Refuse instead: something already answers on $PORT.
+if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+    echo "Port $PORT is already in use - an old bot or dashboard is still running." >&2
+    echo "Stop it (Ctrl+C in its window, or: netstat -ano | grep :$PORT, then taskkill //PID <pid> //T //F)," >&2
+    echo "or use another port: PORT=8002 bash $(basename "$0")" >&2
+    exit 1
+fi
 CLOUDFLARED="${CLOUDFLARED:-$(command -v cloudflared || echo "$HOME/tools/cloudflared.exe")}"
 TUNNEL_LOG=.cloudflared.log
 
