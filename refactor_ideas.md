@@ -223,3 +223,7 @@ Today only `add_trainee.py` registers trainees, and its help says "with country 
 4. **2.2** before the dashboard registers trainees.
 5. **Section 4** before milestone 7.
 6. **The rest** when you're working on the code it's in.
+
+
+marketing:
+  https://www.instagram.com/proclinic_official
