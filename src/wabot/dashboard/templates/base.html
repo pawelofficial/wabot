@@ -47,6 +47,12 @@
       <a href="/dashboard/plans" {% if section == "library" %}class="active" aria-current="page"{% endif %} title="Biblioteka planów">
         <span class="icon">📚</span><span class="label">Biblioteka planów</span>
       </a>
+      {% if is_admin %}
+      <hr>
+      <a href="/dashboard/trainers" {% if section == "trainers" %}class="active" aria-current="page"{% endif %} title="Trenerzy">
+        <span class="icon">🧑‍🏫</span><span class="label">Trenerzy</span>
+      </a>
+      {% endif %}
     </nav>
 
     <div class="sidebar-bottom">

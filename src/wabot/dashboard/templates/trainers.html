@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Trenerzy{% endblock %}
+{% block heading %}Trenerzy{% endblock %}
+{% macro error(name) %}{% if form.errors[name] %}<span class="error small" id="{{ name }}-error">{{ form.errors[name] }}</span>{% endif %}{% endmacro %}
+{% block content %}
+{% if added %}
+<div class="notice" role="status">
+  <p><strong>Dodano: {{ added.name }}.</strong> Może się zalogować na <a href="{{ request.base_url }}dashboard">{{ request.base_url }}dashboard</a> przyciskiem „Zaloguj się przez Google”, kontem <strong>{{ added.email }}</strong>.</p>
+  <p class="small">Dopóki aplikacja logowania Google jest w trybie testowym, Google wpuści tylko konta z listy testowych użytkowników: dodaj {{ added.email }} w Google Cloud → Google Auth Platform → Audience → Test users (albo opublikuj aplikację).</p>
+</div>
+{% endif %}
+
+<section class="card">
+  <h2 class="card-title">Wszyscy trenerzy</h2>
+  <table class="table">
+    <thead><tr><th>Trener</th><th>Gmail do logowania</th><th class="num">Podopieczni</th></tr></thead>
+    <tbody>
+      {% for t, count in rows %}
+      <tr>
+        <td>{{ t.name }}{% if t.id == trainer.id %} <span class="badge">Ty</span>{% endif %}</td>
+        <td>{{ t.email or "—" }}</td>
+        <td class="num">{{ count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2 class="card-title">Dodaj trenera</h2>
+  <p class="card-subtitle">Trener zaloguje się przez Google tym adresem i zobaczy tylko swoich podopiecznych.</p>
+  {% if form.errors %}<div class="error-box" role="alert">Popraw zaznaczone pola.</div>{% endif %}
+  <form method="post" action="/dashboard/trainers" class="trainee-form">
+    <label class="field"><span>Imię i nazwisko</span>
+      <input name="name" value="{{ form.name }}" maxlength="100" required autocomplete="off" placeholder="np. Anna Nowak"
+             {% if form.errors.name %}aria-invalid="true" aria-describedby="name-error"{% endif %}>
+      {{ error("name") }}
+    </label>
+    <label class="field"><span>Gmail (konto Google do logowania)</span>
+      <input type="email" name="email" value="{{ form.email }}" required autocomplete="off" placeholder="np. anna.nowak@gmail.com"
+             {% if form.errors.email %}aria-invalid="true" aria-describedby="email-error"{% endif %}>
+      {{ error("email") }}
+    </label>
+    <div><button type="submit" class="button primary">Dodaj trenera</button></div>
+  </form>
+</section>
+{% endblock %}

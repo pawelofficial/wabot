@@ -57,7 +57,8 @@ class Base(DeclarativeBase):
 
 
 class Trainer(Base):
-    """A personal trainer. Created by hand for now (scripts/add_trainee.py)."""
+    """A personal trainer. Added by an admin in the dashboard (Trenerzy), or by
+    scripts/add_trainee.py."""
 
     __tablename__ = "trainers"
 

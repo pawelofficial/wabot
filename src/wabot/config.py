@@ -85,12 +85,20 @@ class Settings(DatabaseSettings):
     google_client_id: str = ""
     # Local development only: the login page lists the trainers to sign in as, no Google.
     dashboard_dev_login: bool = False
+    # The dashboard's admins: Google emails, comma-separated. A trainer signed in with one of
+    # them also gets Trenerzy (adding trainers, dashboard/trainer_pages.py).
+    admin_emails: str = ""
 
     @field_validator("log_level", mode="before")
     @classmethod
     def _any_case(cls, value):
         # LOG_LEVEL=debug works as well as DEBUG.
         return value.upper() if isinstance(value, str) else value
+
+    def is_admin(self, email: str | None) -> bool:
+        """Whether a trainer with this (lowercase) email is an admin (ADMIN_EMAILS)."""
+        admins = {e.strip().lower() for e in self.admin_emails.split(",") if e.strip()}
+        return email is not None and email.lower() in admins
 
     def missing_for_channel(self) -> list[str]:
         """The active channel's settings that are empty, as .env names."""

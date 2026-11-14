@@ -89,10 +89,23 @@ def current_trainer(request: Request, settings: SettingsDep, session: SessionDep
     trainer = session.get(Trainer, trainer_id)
     if trainer is None:
         raise NotSignedIn
+    # For the sidebar (routes.render()): admins see Trenerzy.
+    request.state.is_admin = settings.is_admin(trainer.email)
     return trainer
 
 
 TrainerDep = Annotated[Trainer, Depends(current_trainer)]
+
+
+def admin(request: Request, trainer: TrainerDep) -> Trainer:
+    """The signed-in trainer, if they're an admin (ADMIN_EMAILS); 404 for everyone else, as if
+    the admin pages didn't exist."""
+    if not request.state.is_admin:
+        raise HTTPException(404)
+    return trainer
+
+
+AdminDep = Annotated[Trainer, Depends(admin)]
 
 
 def trainee_of_trainer(trainee_id: int, trainer: TrainerDep, session: SessionDep) -> Trainee:

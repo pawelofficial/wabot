@@ -111,10 +111,11 @@ TRAINEE_SECTIONS = [
 
 def install(app: FastAPI) -> None:
     # They use render() from here.
-    from wabot.dashboard import plan_pages, trainee_pages, training_pages
+    from wabot.dashboard import plan_pages, trainee_pages, trainer_pages, training_pages
 
     # Before router: /trainees/new isn't a trainee's ID.
     app.include_router(trainee_pages.router)
+    app.include_router(trainer_pages.router)
     app.include_router(router)
     app.include_router(plan_pages.router)
     app.include_router(training_pages.router)
@@ -146,6 +147,7 @@ def render(
             "trainees": own_trainees,
             "trainee": trainee,
             "section": section,
+            "is_admin": getattr(request.state, "is_admin", False),
             "sections": TRAINEE_SECTIONS,
             # Choosing another trainee opens the same page for them (Treningi from the overview).
             "dropdown_section": section
