@@ -1,5 +1,7 @@
 """Treningi: the trainee's training calendar, a month at a time (?month=2026-10), and below it
-the month's trainings with everything reported (docs/PLAN.md, "Training calendar").
+two tabs: the month's trainings with everything reported (docs/PLAN.md, "Training calendar"),
+and Ćwiczenia (?view=exercises): every exercise done, a summary per exercise or one exercise's
+history (&exercise=back_squat), over a date range (&from=…&to=…, the whole history by default).
 
 A day shows its current trainings (queries.workouts()): the plan's, coloured by its status and
 labelled with its plan day's letter, and one outside the plan. Clicking a day jumps to its
@@ -9,9 +11,10 @@ details further down the page; no script is needed.
 import calendar
 import datetime as dt
 from dataclasses import dataclass, field
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
 from wabot import exercises, plans
@@ -83,8 +86,12 @@ def trainings(
     trainer: TrainerDep,
     trainee: TraineeDep,
     month: str | None = None,
+    view: str | None = None,
+    exercise: str | None = None,
+    from_: Annotated[str | None, Query(alias="from")] = None,
+    to: str | None = None,
 ):
-    """The calendar of one month and that month's trainings."""
+    """The calendar of one month and, below it, that month's trainings or the exercises."""
     # Dates are the trainee's: a training's date is the day in their timezone.
     today = dt.datetime.now(ZoneInfo(trainee.timezone)).date()
     first = month_asked(month, today)
@@ -122,6 +129,65 @@ def trainings(
         next=month_param(shift(first, 1)) if first < today.replace(day=1) else None,
         month_param=month_param,
         catalog=exercises.BY_ID,
+        view="exercises" if view == "exercises" else "trainings",
+        ex=exercise_view(session, trainee, current, exercise, from_, to)
+        if view == "exercises"
+        else None,
+    )
+
+
+def date_asked(value: str | None) -> dt.date | None:
+    try:
+        return dt.date.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
+@dataclass
+class ExerciseView:
+    """What the Ćwiczenia tab shows."""
+
+    options: list[tuple[str, str]]  # (key, name): every exercise done, then the plan's others
+    chosen: str  # an option's key, or "" for the summary of all
+    chosen_name: str | None
+    first: dt.date | None  # the range asked (None: from the first training)
+    last: dt.date | None
+    earliest: dt.date | None  # the trainee's first and last training with exercises
+    latest: dt.date | None
+    summary: list[queries.ExerciseSummary]  # all exercises in the range (nothing chosen)
+    rows: list[queries.ExerciseDone]  # the chosen exercise's, newest first
+    stats: queries.ExerciseSummary | None  # the chosen exercise's, in the range
+
+
+def exercise_view(session, trainee, plan, exercise, from_, to) -> ExerciseView:
+    everything = queries.exercises_done(session, trainee)
+    options = [(s.key, s.name) for s in queries.summarize(everything)]
+    known = {key for key, _ in options}
+    for day in plan.days if plan else []:
+        for planned in day.exercises:
+            if planned.id not in known:
+                known.add(planned.id)
+                options.append((planned.id, f"{exercises.BY_ID[planned.id].name} (jeszcze nie)"))
+    first, last = date_asked(from_), date_asked(to)
+    done = [
+        d
+        for d in everything
+        if (first is None or d.date >= first) and (last is None or d.date <= last)
+    ]
+    chosen = exercise if exercise in known else ""
+    rows = [d for d in done if queries.exercise_key(d.exercise) == chosen] if chosen else []
+    stats = queries.summarize(rows)
+    return ExerciseView(
+        options=options,
+        chosen=chosen,
+        chosen_name=dict(options).get(chosen),
+        first=first,
+        last=last,
+        earliest=min((d.date for d in everything), default=None),
+        latest=max((d.date for d in everything), default=None),
+        summary=[] if chosen else queries.summarize(done),
+        rows=rows,
+        stats=stats[0] if stats else None,
     )
 
 

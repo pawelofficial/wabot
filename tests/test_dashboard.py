@@ -1099,3 +1099,128 @@ def test_the_sites_address_opens_the_dashboard(client):
     response = client.get("/", follow_redirects=False)
     assert response.status_code == 307 and response.headers["location"] == "/dashboard"
     assert client.get("/health").json() == {"status": "ok"}
+
+
+# Treningi → Ćwiczenia
+
+
+def exercises_page(client, trainee, query=""):
+    return client.get(
+        f"/dashboard/trainees/{trainee.id}/trainings?month=2026-10&view=exercises{query}"
+    )
+
+
+def squat(kg, in_plan=True, **fields):
+    return ex("back_squat", "Przysiad", in_plan, sets=4, reps="5", weight_kg=kg, **fields)
+
+
+def test_the_tabs_under_the_calendar(client, settings, people):
+    kasia = people["Kasia"]
+    give_plan(kasia)
+    add_training(kasia, october(5), "yanek dół", "Wtorek – dół 1", [squat(100)])
+    sign_in(client, people["Trener Marek"])
+    page = client.get(f"/dashboard/trainees/{kasia.id}/trainings?month=2026-10").text
+    assert 'class="tab active" href="?month=2026-10" aria-current="page">Treningi' in page
+    assert 'href="?month=2026-10&amp;view=exercises">Ćwiczenia' in page
+    assert '<h2 class="card-title">Treningi ' in page  # the trainings tab is the default
+    page = exercises_page(client, kasia).text
+    assert 'aria-current="page">Ćwiczenia' in page
+    assert '<h2 class="card-title">Treningi ' not in page
+    assert '<table class="calendar">' in page  # the calendar stays above both
+
+
+def test_the_exercises_tab_sums_up_each_exercise(client, settings, people):
+    kasia, ola = people["Kasia"], people["Ola"]
+    give_plan(kasia)
+    add_training(
+        kasia, october(6), "yanek dół", "Wtorek – dół 1", [squat(100), ex("leg_curl", "Uginanie")]
+    )
+    add_training(kasia, october(13), "yanek dół", "Wtorek – dół 1", [squat(105)])
+    # Corrected the same day: only the newer report counts, like in the calendar.
+    add_training(kasia, october(20), "yanek przysiad 120", "Wtorek – dół 1", [squat(120)])
+    add_training(kasia, october(20), "yanek sorki 102,5", "Wtorek – dół 1", [squat(102.5)])
+    add_training(
+        kasia,
+        october(21),
+        "yanek bieg",
+        exercises=[ex(None, "Bieg 5 km", in_plan=False, reps="28 min")],
+    )
+    # Another trainee's (Ola has no plan).
+    add_training(ola, october(6), "yanek przysiad", exercises=[squat(200, in_plan=False)])
+    sign_in(client, people["Trener Marek"])
+
+    response = exercises_page(client, kasia)
+    summary = {s.name: s for s in response.context["ex"].summary}
+    squats = summary[NAME["back_squat"]]
+    assert (squats.times, squats.last, squats.best_kg) == (3, october(20), 105.0)
+    assert squats.latest.weight_kg == 102.5  # the correction, not the 120
+    assert summary["Bieg 5 km"].times == 1  # outside the plan, by name
+    assert summary[NAME["leg_curl"]].latest.sets is None  # reported without numbers
+    page = response.text
+    assert "4 × 5, 102,5 kg" in page and "wg planu" in page and "200" not in page
+    assert list(summary)[0] == NAME["back_squat"]  # the most frequent first
+
+
+def test_one_exercises_history_in_a_range(client, settings, people):
+    kasia = people["Kasia"]
+    give_plan(kasia)
+    for day, kg in ((6, 100), (13, 105), (20, 110)):
+        add_training(kasia, october(day), "yanek dół", "Wtorek – dół 1", [squat(kg)])
+    leg_press = ex(
+        "leg_press",
+        "Suwnica",
+        in_plan=False,
+        replaces="back_squat",
+        sets=3,
+        reps="10",
+        comment="kolano",
+    )
+    add_training(
+        kasia, october(27), "yanek suwnica zamiast przysiadów", "Wtorek – dół 1", [leg_press]
+    )
+    sign_in(client, people["Trener Marek"])
+
+    response = exercises_page(client, kasia, "&exercise=back_squat&from=2026-10-10")
+    ex_view = response.context["ex"]
+    assert [d.date.day for d in ex_view.rows] == [20, 13]  # newest first, from the 10th
+    assert (ex_view.stats.times, ex_view.stats.best_kg) == (2, 110.0)
+    page = response.text
+    assert "2 treningi, ostatnio wt 20 paź 2026, najwięcej 110,0 kg" in page
+    assert 'href="?month=2026-10#d-2026-10-13"' in page  # to that day in the calendar
+
+    rows = exercises_page(client, kasia, "&exercise=leg_press").context["ex"].rows
+    assert [(d.date.day, d.exercise.replaces) for d in rows] == [(27, "back_squat")]
+    page = exercises_page(client, kasia, "&exercise=leg_press").text
+    assert f"zamiast: {NAME['back_squat']}; kolano" in page
+
+    to_the_12th = exercises_page(client, kasia, "&exercise=back_squat&to=2026-10-12")
+    assert [d.date.day for d in to_the_12th.context["ex"].rows] == [6]
+
+
+def test_plan_exercises_not_done_yet_can_be_chosen(client, settings, people):
+    kasia = people["Kasia"]
+    give_plan(kasia)
+    add_training(kasia, october(6), "yanek dół", "Wtorek – dół 1", [squat(100)])
+    sign_in(client, people["Trener Marek"])
+    ex_view = exercises_page(client, kasia).context["ex"]
+    options = dict(ex_view.options)
+    assert options["back_squat"] == NAME["back_squat"]
+    assert options["bench_press"] == f"{NAME['bench_press']} (jeszcze nie)"  # in upper_lower.yaml
+    page = exercises_page(client, kasia, "&exercise=bench_press").text
+    assert "nie zgłosił(a) tego ćwiczenia w tym okresie" in page
+
+
+def test_a_wrong_filter_shows_everything(client, settings, people):
+    kasia = people["Kasia"]
+    give_plan(kasia)
+    add_training(kasia, october(6), "yanek dół", "Wtorek – dół 1", [squat(100)])
+    sign_in(client, people["Trener Marek"])
+    response = exercises_page(client, kasia, "&exercise=nonsense&from=never&to=2026-13-40")
+    assert response.status_code == 200
+    ex_view = response.context["ex"]
+    assert (ex_view.chosen, ex_view.first, ex_view.last) == ("", None, None)
+    assert [s.name for s in ex_view.summary] == [NAME["back_squat"]]
+    # Another trainer's trainee: not found, as everywhere.
+    client.cookies.clear()
+    sign_in(client, people["Trenerka Ewa"])
+    assert exercises_page(client, kasia).status_code == 404

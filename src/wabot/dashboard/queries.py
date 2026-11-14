@@ -14,7 +14,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from wabot import exercises
-from wabot.models import Message, Trainee, TraineePlan, TrainingCheckin, WeightEntry
+from wabot.models import (
+    Message,
+    Trainee,
+    TraineePlan,
+    TrainingCheckin,
+    TrainingExercise,
+    WeightEntry,
+)
 from wabot.plans import TrainingPlan
 
 
@@ -264,3 +271,83 @@ def last_training_date(session: Session, trainee: Trainee) -> dt.date | None:
     return session.scalar(
         select(func.max(TrainingCheckin.date)).where(TrainingCheckin.trainee_id == trainee.id)
     )
+
+
+# Ćwiczenia (Treningi's second tab): every exercise done, from the reports that count.
+
+
+def exercise_key(exercise: TrainingExercise) -> str:
+    """What makes two reported exercises the same one: the catalog ID, or for an exercise
+    without one (not in the catalog) its name, ignoring case."""
+    return exercise.exercise_id or f"name:{exercise.name.strip().lower()}"
+
+
+def exercise_name(exercise: TrainingExercise) -> str:
+    """The catalog's name for a catalog exercise (the same however the trainee wrote it)."""
+    found = exercises.BY_ID.get(exercise.exercise_id or "")
+    return found.name if found else exercise.name
+
+
+@dataclass
+class ExerciseDone:
+    """One exercise in one of the trainee's current trainings."""
+
+    checkin: TrainingCheckin
+    exercise: TrainingExercise
+
+    @property
+    def date(self) -> dt.date:
+        return self.checkin.date
+
+
+def exercises_done(
+    session: Session, trainee: Trainee, first: dt.date | None = None, last: dt.date | None = None
+) -> list[ExerciseDone]:
+    """The exercises of the trainee's current trainings (the newest report of each day and kind,
+    like the calendar), newest first; from `first` to `last` (inclusive) when given."""
+    newest = _newest_ids(TrainingCheckin, trainee, TrainingCheckin.outside_plan)
+    if first is not None:
+        newest = newest.where(TrainingCheckin.date >= first)
+    if last is not None:
+        newest = newest.where(TrainingCheckin.date <= last)
+    checkins = session.scalars(
+        select(TrainingCheckin)
+        .where(TrainingCheckin.id.in_(newest))
+        .options(selectinload(TrainingCheckin.exercises))
+        .order_by(TrainingCheckin.date.desc(), TrainingCheckin.id.desc())
+    )
+    return [ExerciseDone(c, e) for c in checkins for e in c.exercises]
+
+
+@dataclass
+class ExerciseSummary:
+    """One exercise over a time range: how often and how much."""
+
+    key: str
+    name: str
+    times: int  # trainings it was in
+    last: dt.date
+    best_kg: float | None  # the heaviest weight reported
+    # The newest time it was done ("reszta wg planu" leaves no numbers: then the plan's).
+    latest: TrainingExercise
+
+
+def summarize(done: list[ExerciseDone]) -> list[ExerciseSummary]:
+    """Per exercise, the most frequent first."""
+    by_key: dict[str, list[ExerciseDone]] = {}
+    for d in done:
+        by_key.setdefault(exercise_key(d.exercise), []).append(d)
+    found = []
+    for key, rows in by_key.items():
+        weights = [r.exercise.weight_kg for r in rows if r.exercise.weight_kg is not None]
+        found.append(
+            ExerciseSummary(
+                key=key,
+                name=exercise_name(rows[0].exercise),
+                times=len({r.checkin.id for r in rows}),
+                last=max(r.date for r in rows),
+                best_kg=max(weights) if weights else None,
+                latest=max(rows, key=lambda r: (r.date, r.checkin.id)).exercise,
+            )
+        )
+    return sorted(found, key=lambda s: (-s.times, s.name.lower()))

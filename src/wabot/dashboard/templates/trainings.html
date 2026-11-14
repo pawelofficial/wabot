@@ -15,6 +15,83 @@
 {%- if days == 0 %}dziś{% elif days == 1 %}wczoraj{% else %}{{ days|pl_count("dzień", "dni", "dni") }} temu{% endif -%}
 {%- endmacro %}
 
+
+{# Ćwiczenia: every exercise done in the range, or one exercise's history (training_pages.ExerciseView). #}
+{# What was done of one exercise; "wg planu" when the trainee gave no numbers ("reszta wg planu"). #}
+{% macro dose(e) %}{{ e|pl_dose or ("wg planu" if e.in_plan else "—") }}{% endmacro %}
+{% macro exercise_tab(ex) %}
+<section class="card">
+  <form method="get" class="inline-form exercise-filter">
+    <input type="hidden" name="month" value="{{ month_param(month) }}">
+    <input type="hidden" name="view" value="exercises">
+    <label class="field"><span>Ćwiczenie</span>
+      <select name="exercise">
+        <option value="">Wszystkie ćwiczenia</option>
+        {% for key, name in ex.options %}<option value="{{ key }}" {% if key == ex.chosen %}selected{% endif %}>{{ name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="field"><span>Od</span><input type="date" name="from" value="{{ ex.first.isoformat() if ex.first else '' }}"></label>
+    <label class="field"><span>Do</span><input type="date" name="to" value="{{ ex.last.isoformat() if ex.last else '' }}"></label>
+    <button type="submit" class="button primary">Pokaż</button>
+    {% if ex.chosen or ex.first or ex.last %}<a class="button" href="?month={{ month_param(month) }}&amp;view=exercises">Wyczyść</a>{% endif %}
+  </form>
+  <p class="card-subtitle">
+    {% if ex.first or ex.last %}Od {{ (ex.first or ex.earliest)|pl_date if (ex.first or ex.earliest) else "początku" }} do {{ (ex.last or ex.latest)|pl_date if (ex.last or ex.latest) else "dziś" }}.
+    {% else %}Cała historia{% if ex.earliest %} ({{ ex.earliest|pl_date }} – {{ ex.latest|pl_date }}){% endif %}.{% endif %}
+    Liczy się ostatnie zgłoszenie z danego dnia, jak w kalendarzu.
+  </p>
+
+  {% if not ex.chosen %}
+  {% if ex.summary %}
+  <div class="table-scroll">
+    <table class="table">
+      <thead><tr><th>Ćwiczenie</th><th class="num">Treningi</th><th>Ostatnio</th><th>Ostatnie wykonanie</th><th class="num">Najwięcej</th></tr></thead>
+      <tbody>
+        {% for s in ex.summary %}
+        <tr>
+          <td><a href="?month={{ month_param(month) }}&amp;view=exercises&amp;exercise={{ s.key|urlencode }}{% if ex.first %}&amp;from={{ ex.first.isoformat() }}{% endif %}{% if ex.last %}&amp;to={{ ex.last.isoformat() }}{% endif %}">{{ s.name }}</a></td>
+          <td class="num">{{ s.times }}</td>
+          <td class="nowrap">{{ s.last|pl_date }}</td>
+          <td class="dose nowrap">{{ dose(s.latest) }}</td>
+          <td class="num nowrap">{{ s.best_kg|pl_kg if s.best_kg is not none else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">W tym okresie nie ma zgłoszonych ćwiczeń.</p>
+  {% endif %}
+
+  {% else %}
+  <h2 class="card-title">{{ ex.chosen_name }}</h2>
+  {% if ex.stats %}
+  <p>{{ ex.stats.times|pl_count("trening", "treningi", "treningów") }}, ostatnio {{ ex.stats.last|pl_date(true) }}{% if ex.stats.best_kg is not none %}, najwięcej {{ ex.stats.best_kg|pl_kg }}{% endif %}.</p>
+  <div class="table-scroll">
+    <table class="table">
+      <thead><tr><th>Dzień</th><th>Trening</th><th>Wykonanie</th><th>Uwagi</th></tr></thead>
+      <tbody>
+        {% for d in ex.rows %}
+        <tr>
+          <td class="nowrap"><a href="?month={{ month_param(d.date) }}#d-{{ d.date.isoformat() }}">{{ d.date|pl_date(true) }}</a></td>
+          <td>{{ d.checkin.plan_day or ("poza planem" if d.checkin.outside_plan else "z planu") }}</td>
+          <td class="dose nowrap">{{ dose(d.exercise) }}</td>
+          <td class="small">
+            {%- if d.exercise.replaces %}zamiast: {{ catalog[d.exercise.replaces].name if d.exercise.replaces in catalog else d.exercise.replaces }}{% endif %}
+            {%- if d.exercise.replaces and d.exercise.comment %}; {% endif %}
+            {%- if d.exercise.comment %}{{ d.exercise.comment }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">{{ trainee.name }} nie zgłosił(a) tego ćwiczenia w tym okresie.</p>
+  {% endif %}
+  {% endif %}
+</section>
+{% endmacro %}
+
 {% block content %}
 {% if not last %}
 <p class="empty">Brak zgłoszonych treningów. Pojawią się tu, gdy {{ trainee.name }} napisze np. „yanek trening A zrobiony”.</p>
@@ -89,6 +166,12 @@
   {% endif %}
 </section>
 
+<nav class="tabs" aria-label="Widok pod kalendarzem">
+  <a class="tab{{ ' active' if view == 'trainings' }}" href="?month={{ month_param(month) }}"{% if view == 'trainings' %} aria-current="page"{% endif %}>Treningi</a>
+  <a class="tab{{ ' active' if view == 'exercises' }}" href="?month={{ month_param(month) }}&amp;view=exercises"{% if view == 'exercises' %} aria-current="page"{% endif %}>Ćwiczenia</a>
+</nav>
+
+{% if view == "trainings" %}
 <section class="card">
   <h2 class="card-title">Treningi {{ month|pl_month(true) }}</h2>
   {% if days %}
@@ -140,5 +223,8 @@
   </p>
   {% endif %}
 </section>
+{% else %}
+{{ exercise_tab(ex) }}
+{% endif %}
 {% endif %}
 {% endblock %}
