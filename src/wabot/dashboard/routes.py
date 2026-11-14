@@ -110,8 +110,11 @@ TRAINEE_SECTIONS = [
 
 
 def install(app: FastAPI) -> None:
-    from wabot.dashboard import plan_pages, training_pages  # they use render() from here
+    # They use render() from here.
+    from wabot.dashboard import plan_pages, trainee_pages, training_pages
 
+    # Before router: /trainees/new isn't a trainee's ID.
+    app.include_router(trainee_pages.router)
     app.include_router(router)
     app.include_router(plan_pages.router)
     app.include_router(training_pages.router)
@@ -154,9 +157,24 @@ def render(
 
 
 @router.get("")
-def overview(request: Request, session: SessionDep, trainer: TrainerDep):
-    """Home: the trainer's trainees."""
-    return render(request, "overview.html", session, trainer, section="overview")
+def overview(
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    trainer: TrainerDep,
+    added: str | None = None,
+):
+    """Home: the trainer's trainees; after adding one (?added=<id>), how they connect."""
+    from wabot.dashboard.trainee_pages import added_notice
+
+    return render(
+        request,
+        "overview.html",
+        session,
+        trainer,
+        section="overview",
+        added=added_notice(session, settings, trainer, added),
+    )
 
 
 @router.get("/trainees/{trainee_id}/weight")

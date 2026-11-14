@@ -1,20 +1,33 @@
 {% extends "base.html" %}
 {% block title %}Podopieczni{% endblock %}
 {% block heading %}Podopieczni{% endblock %}
+{% block actions %}<a class="button primary" href="/dashboard/trainees/new">➕ Dodaj podopiecznego</a>{% endblock %}
 {% block content %}
+{% if added %}
+{% set new, link = added %}
+<div class="notice" role="status">
+  <p><strong>Dodano: {{ new.name }}.</strong> Żeby zaczął wysyłać raporty Yankowi:</p>
+  <ol>
+    <li>Wyślij mu link do bota: {% if link %}<a href="{{ link }}">{{ link }}</a>{% else %}t.me/… (link do Yanka na Telegramie){% endif %}</li>
+    <li>Niech go otworzy, naciśnie <strong>Start</strong> i <strong>„Udostępnij numer telefonu”</strong> – z numeru +{{ new.phone }}.</li>
+  </ol>
+  <p class="small">Gdy to zrobi, w tabeli przy nim pojawi się „połączony”.</p>
+</div>
+{% endif %}
 {% if trainees %}
 <table class="table">
-  <thead><tr><th>Imię</th><th>Telefon</th></tr></thead>
+  <thead><tr><th>Imię</th><th>Telefon</th><th>Telegram</th></tr></thead>
   <tbody>
     {% for t in trainees %}
     <tr>
       <td><a href="/dashboard/trainees/{{ t.id }}/trainings">{{ t.name }}</a></td>
-      <td>+{{ t.phone }}</td>
+      <td class="nowrap">+{{ t.phone }}</td>
+      <td>{% if t.telegram_chat_id %}połączony{% else %}<span class="muted">jeszcze nie połączony</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
 {% else %}
-<p class="empty">Nie masz jeszcze podopiecznych.</p>
+<p class="empty">Nie masz jeszcze podopiecznych. <a href="/dashboard/trainees/new">Dodaj pierwszego</a>.</p>
 {% endif %}
 {% endblock %}

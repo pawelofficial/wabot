@@ -196,7 +196,6 @@ async def receive_telegram(
         stored.body = msg.text
         stored.trainee_id = trainee.id
         stored.trainer_id = trainee.trainer_id
-    # Otherwise it's someone who isn't a linked trainee: only what dedup needs, not the text.
 
     if linked:
         notice = (TELEGRAM_LINKED, telegram.REMOVE_KEYBOARD)
@@ -209,8 +208,15 @@ async def receive_telegram(
         notice = (TELEGRAM_HELP, None)
     else:
         notice = None
+    if trainee is None:
+        # Someone who isn't a linked trainee (anyone can find the bot on Telegram): answered,
+        # but nothing is stored, so strangers' messages can't fill the database (or, on Cloud
+        # Run, cause an upload each). A redelivery just gets the same answer again.
+        log.info("Telegram message %s from someone who isn't a trainee", msg.external_id)
+        await after_storing(settings, background, send_telegram_notice, msg.chat_id, *notice)
+        return {"status": "ok"}
     text = msg.text
-    if trainee is not None and notice is None and msg.voice_file_id is not None:
+    if notice is None and msg.voice_file_id is not None:
         # A voice message: its text is the transcript (with the caption, if it has one), and from
         # here on it's read like a typed message. Transcribed before storing, so no reply sees it
         # without its text; a redelivery isn't transcribed (paid) a second time.
@@ -225,7 +231,7 @@ async def receive_telegram(
         else:
             text = " ".join(filter(None, [msg.text, transcript]))
             stored.body = text
-    if trainee is not None and notice is not None:
+    if notice is not None:
         # The shared number, /start or an untranscribed voice message: answered by the fixed
         # text, not a report, so the next reply doesn't read it as a new message.
         stored.handled_at = utcnow()

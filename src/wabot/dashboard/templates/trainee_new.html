@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Dodaj podopiecznego{% endblock %}
+{% block heading %}Dodaj podopiecznego{% endblock %}
+{% macro error(name) %}{% if form.errors[name] %}<span class="error small" id="{{ name }}-error">{{ form.errors[name] }}</span>{% endif %}{% endmacro %}
+{% block content %}
+<section class="card">
+  {% if form.errors %}
+  <div class="error-box" role="alert">Popraw zaznaczone pola.</div>
+  {% endif %}
+  <form method="post" action="/dashboard/trainees/new" class="trainee-form">
+    <label class="field"><span>Imię</span>
+      <input name="name" value="{{ form.name }}" maxlength="100" required autocomplete="off"
+             placeholder="np. Kasia" {% if form.errors.name %}aria-invalid="true" aria-describedby="name-error"{% endif %}>
+      {{ error("name") }}
+    </label>
+    <label class="field"><span>Numer telefonu</span>
+      <input name="phone" value="{{ form.phone }}" required inputmode="tel" autocomplete="off"
+             placeholder="np. 792 541 888" {% if form.errors.phone %}aria-invalid="true" aria-describedby="phone-error"{% endif %}>
+      <span class="muted small">Ten, którym podopieczny udostępni się Yankowi na Telegramie. Bez kierunkowego przyjmujemy +48.</span>
+      {{ error("phone") }}
+    </label>
+    <label class="field"><span>Data podpisania zgody (papierowej)</span>
+      <input type="date" name="consent_date" value="{{ form.consent_date }}" max="{{ today.isoformat() }}" required
+             {% if form.errors.consent_date %}aria-invalid="true" aria-describedby="consent_date-error"{% endif %}>
+      <span class="muted small">Zgodę przechowujesz u siebie; tu zapisujemy tylko, że ją masz.</span>
+      {{ error("consent_date") }}
+    </label>
+    <label class="field"><span>Plan treningowy (opcjonalnie)</span>
+      <select name="template_id">
+        <option value="">Bez planu – przypiszę później</option>
+        {% for t in library %}<option value="{{ t.id }}" {% if form.template_id == t.id|string %}selected{% endif %}>{{ t.name }}</option>{% endfor %}
+      </select>
+      {{ error("template_id") }}
+    </label>
+    <div><button type="submit" class="button primary">Dodaj podopiecznego</button></div>
+  </form>
+</section>
+{% endblock %}

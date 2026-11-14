@@ -149,9 +149,9 @@ Telegram ──POST /telegram/webhook──► main.receive_telegram()
   │       voice.transcribe(audio)           OpenAI OPENAI_TRANSCRIBE_MODEL, language "pl"
   │       a failure or nothing recognised → None (logged)
   │     text → the message's text (after the caption, if any); None → VOICE_NOT_UNDERSTOOD below
-  ├─ INSERT Message(channel="telegram", external_id, ...)
-  │     a (now) known trainee: with body, phone, trainee_id, trainer_id
-  │     anyone else:           only what dedup needs
+  ├─ not a (now) known trainee → the fixed text below, nothing stored (anyone can find the bot;
+  │     strangers can't fill the database), 200
+  ├─ INSERT Message(channel="telegram", external_id, ...) with body, phone, trainee_id, trainer_id
   │     external_id already there (Telegram redelivered) → rollback, 200
   └─ then (main.after_storing(): after the 200 locally, before it with REPLY_IN_REQUEST on Cloud Run):
         just connected      → send_telegram_notice(TELEGRAM_LINKED, REMOVE_KEYBOARD, trainee)  stored
@@ -418,6 +418,8 @@ The same FastAPI app as the webhook; `main.py` calls `dashboard.routes.install(a
 
 **The messages behind an entry** (`queries.conversations()`, `templates/_conversations.html`): every weight and training on these pages has a closed "Pokaż wiadomości" (a `<details>`, no JavaScript) with the conversation of each report of that day, oldest first, the last one the one that counts ("to się liczy"; the earlier ones "zastąpione późniejszym"). A report's conversation starts from the message the entry was saved from (`message_id`, the "yanek" the reply answered): the trainee's messages the same reply marked handled share its `handled_at` (`conversation.claim()` marks them in one statement), so it's everything from the first of them to the bot's first message after the last of them (its answer), the bot's messages in between included (an apology after a failed try). Only the trainee's own messages (`trainee_id`, `trainer_id`). A voice message shows its transcript, marked "wiadomość głosowa".
 
+**Adding a trainee** (`trainee_pages.py`, `/dashboard/trainees/new`, "Dodaj podopiecznego" in the sidebar and on Podopieczni): name, phone number, the paper consent's date (today by default, not in the future), optionally a plan from the trainer's library. `check()` says what's wrong per field, in Polish, and the form comes back as typed (422): an empty name, a number that isn't one (nine digits get 48 in front: a Polish number typed without the country code), a number already registered (the trainer's own trainee is named, another trainer's isn't), another trainer's library plan. Saved: a `Trainee` with the default timezone, and the library plan through `plan_history.assign()` (a copy, linked to the template). Then `/dashboard?added=<id>` shows how the trainee connects: the bot's link (`t.me/<bot>`, asked from Telegram once and cached) and "Udostępnij numer telefonu" from that number. Podopieczni shows per trainee whether they've connected (`telegram_chat_id`).
+
 **The weight page** (`routes.weight`): `queries.weigh_ins()` takes the trainee's `weight_entries`, keeps the newest row of each date (`current_per_day()`: `MAX(id)` per date, so a correction like "sorki, 81" wins), and adds the body of the message each was saved from and how many reports the day had. The template shows three tiles (last weight, change since the first weigh-in, number of days), the chart, and a table of every day (newest first, the change from the day before, the message, "poprawiona" when the day was reported more than once). The chart's points go into the page as JSON (`<script type="application/json" id="weight-data">`, escaped by Jinja's `tojson`); `static/weight_chart.js` reads it and draws the SVG: dates spaced by time, round kg gridlines around the data (not from zero), the latest value at the end of the line, and a tooltip with the day, the weight and the message for the day nearest the pointer (or the arrow keys).
 
 **The trainings page** (`training_pages.trainings`, `GET /trainees/<id>/trainings?month=2026-10`; without `month`, or with something that isn't one or is outside 2000–2100, this month in the trainee's timezone):
@@ -536,7 +538,7 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 
 - **Corrections of older reports.** The LLM doesn't see what's saved, only the chat history. A correction of a training whose report is no longer in the history (older than 24 h or 20 messages, or always with `HISTORY_MODE=new_only`) replaces that day with just the corrected part. Milestone 4: show the LLM the saved entries of the last days.
 - **Diet reports** are only acknowledged, not extracted or saved.
-- The dashboard has the trainee list, the weight chart, the training calendar, the plan with its editor and history, and the plan library. The calendar has no expected sessions yet ("A planned, no report", "2/3 this week"): the plan fields `weekdays` and `sessions_per_week` aren't built. Trainers can't add their own exercises to the catalog yet. Google sign-in is built but untested against real Google until there's an OAuth client ID. No reminders, no photos. The dashboard doesn't show whether a trainee has connected on Telegram yet.
+- The dashboard has the trainee list (with whether each has connected on Telegram), adding a trainee (`trainee_pages.py`), the weight chart, the training calendar, the plan with its editor and history, and the plan library. The calendar has no expected sessions yet ("A planned, no report", "2/3 this week"): the plan fields `weekdays` and `sessions_per_week` aren't built. Trainers can't add their own exercises to the catalog yet. Google sign-in works on Cloud Run (2026-11-14). No reminders, no photos. A trainee can't be edited or removed in the dashboard yet.
 
 ## Tests
 

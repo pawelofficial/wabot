@@ -123,14 +123,8 @@ def test_without_a_bot_token_every_update_is_refused(client, telegram_sent, sett
 def test_a_new_chat_is_asked_for_the_number(client, telegram_sent):
     add_trainee()
     assert post(client, update(1, "/start")).status_code == 200
-    [stored] = stored_messages()
-    # Someone the bot doesn't know yet: only what dedup needs.
-    assert (stored.channel, stored.external_id, stored.direction) == (
-        "telegram",
-        "tg:555001:1",
-        "in",
-    )
-    assert (stored.body, stored.phone, stored.trainee_id) == (None, None, None)
+    # Someone the bot doesn't know yet: answered, nothing stored (anyone can find the bot).
+    assert stored_messages() == []
     [sent] = telegram_sent
     assert (sent.chat_id, sent.text, sent.keyboard) == (
         CHAT,
@@ -186,8 +180,8 @@ def test_someone_elses_contact_card_connects_nobody(client, telegram_sent):
     post(client, contact(1, PHONE, user_id=777))  # a contact from the address book
     assert trainee_chat(trainee.id) is None
     assert telegram_sent[0].text == main.TELEGRAM_ASK_FOR_PHONE
-    # Nothing kept but what dedup needs; the bot's answer isn't stored either.
-    assert [(m.direction, m.trainee_id) for m in stored_messages()] == [("in", None)]
+    # Nothing stored, neither the message nor the bot's answer.
+    assert stored_messages() == []
 
 
 def test_a_number_that_isnt_registered_is_told_to_ask_the_trainer(client, telegram_sent):
@@ -196,7 +190,13 @@ def test_a_number_that_isnt_registered_is_told_to_ask_the_trainer(client, telegr
     [sent] = telegram_sent
     # The button stays: once the trainer registers the number, sharing it again works.
     assert (sent.text, sent.keyboard) == (main.UNREGISTERED, telegram.ASK_FOR_PHONE)
-    assert stored_messages()[0].trainee_id is None
+    assert stored_messages() == []
+
+
+def test_a_stranger_flooding_the_bot_fills_nothing(client, telegram_sent):
+    for i in range(1, 21):
+        post(client, update(i, f"spam {i}", chat_id=999000 + i))
+    assert stored_messages() == [] and len(telegram_sent) == 20
 
 
 def test_a_trainee_on_a_new_telegram_account_moves_there(client, telegram_sent):

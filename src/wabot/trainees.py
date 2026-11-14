@@ -1,5 +1,5 @@
 """Trainees and trainers: who is behind a phone number or a Telegram chat, and registering
-trainees until the dashboard does it (scripts/add_trainee.py)."""
+trainees (the dashboard's Dodaj podopiecznego, scripts/add_trainee.py)."""
 
 import re
 

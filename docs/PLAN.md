@@ -92,7 +92,7 @@ How a "yanek" message turns into a reply, case by case (a simple report, a repor
 - Trainee list with last report per category and overdue highlighting.
 - Trainee page: weight chart, training calendar (below), training and diet check-in history, photos.
 - Edit: training plan (built from the exercise catalog: days, exercises, sets/reps/weight, allowed replacements), diet plan, notes (free text), reminder schedule.
-- Register trainee: name, phone, consent-on-file date.
+- Register trainee: name, phone, consent-on-file date (built 2026-11-14: "Dodaj podopiecznego", optionally with a library plan; then the bot's link and how to connect. Editing or removing a trainee: not yet).
 - Exercises: add the trainer's own; map reported exercises that have no ID (see "Open ideas").
 - Every query filtered by the signed-in trainer's ID.
 
@@ -104,7 +104,7 @@ Same FastAPI app as the bot, server-rendered Jinja templates plus HTMX, charts d
 
 1. Trainee dropdown – this trainer's trainees only. Choosing one opens the same section for that trainee (on "Waga" for Kasia → "Waga" for Ola).
 2. Trainee sections (greyed out until a trainee is chosen): **Waga** (weight chart), **Treningi** (training calendar and check-in history), **Plan treningowy** (the plan, with an Edit button); Treningi and Plan treningowy are separate views (decided 2026-11-04). Later: Dieta, Wiadomości (the WhatsApp chat as the bot saw it), Przypomnienia.
-3. Trainer sections, separated by a line: **Podopieczni** (the home view), **Biblioteka planów** (plans not tied to a trainee, added 2026-11-04), later Dodaj podopiecznego, Ćwiczenia.
+3. Trainer sections, separated by a line: **Podopieczni** (the home view), **Biblioteka planów** (plans not tied to a trainee, added 2026-11-04), **Dodaj podopiecznego** (built 2026-11-14), later Ćwiczenia.
 4. At the bottom: the trainer's name and Wyloguj.
 
 **Home view = trainee overview.** One row per trainee: last weight and its date, last training and its status, sessions this week, and highlighting when a report type is older than a few days (the MVP "missed reports" rule). Clicking a row opens that trainee's Treningi. It needs no trainee chosen, which is why it's the home view.
