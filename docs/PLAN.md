@@ -170,9 +170,9 @@ A month view per trainee (built 2026-11-04, see step 4 above). Each day shows th
 |---|---|
 | Messenger | Telegram Bot API (`CHANNEL=telegram`, webhook `/telegram/webhook` with a secret header) or Meta WhatsApp Cloud API (`CHANNEL=whatsapp`, webhook `/webhook` with a signature), both called directly with httpx |
 | Bot + dashboard | Python, FastAPI on Cloud Run (`europe-central2`) |
-| Async processing | Webhook verifies the signature or secret, stores the message (unique `external_id` = dedup), acks 200, enqueues Cloud Task |
+| Async processing | Webhook verifies the signature or secret, stores the message (unique `external_id` = dedup), then replies. Locally the reply runs after the 200 (a background task); on Cloud Run before it (`REPLY_IN_REQUEST`, decided 2026-11-14: Cloud Run gives CPU only during a request, and this keeps per-request billing). Cloud Tasks when replies need retries or get too slow for the webhook |
 | AI | OpenAI Python SDK (Responses API), structured output (read tools still open); default model `gpt-5.6-luna` (switched from Anthropic on 2026-11-01 – existing OpenAI credit; from `gpt-5.4-mini` to Luna on 2026-11-03 – about 4x cheaper and as good in tests) |
-| Database | Cloud SQL Postgres, SQLAlchemy + Alembic |
+| Database | SQLAlchemy + Alembic. Now (decided 2026-11-14): SQLite on Cloud Run, kept in a Cloud Storage bucket (downloaded at start, uploaded after every change; one instance), about $0–2 a month instead of Cloud SQL's ~$10+ or an always-on instance's ~$55–65. Cloud SQL Postgres when there are more trainees or more than one instance is needed |
 | Files | Cloud Storage (photos) |
 | Scheduling | Cloud Scheduler → reminders endpoint |
 | Secrets | Secret Manager |
@@ -234,7 +234,7 @@ Milestones 1–5 are developed and run **locally** (`bash run.sh` migrates the d
    - Production bot number: a Polish prepaid SIM (decided – not a personal number, which would lose its WhatsApp account), never registered on WhatsApp. It only has to receive one verification SMS or call – no device stays connected – but keep the number active so it can be re-verified later.
    - Bot display name (Meta reviews it).
    - Submit the Polish reminder templates for approval.
-7. **Production** – GCP project in `europe-central2`, Cloud Run deploy, Cloud SQL, Secret Manager, basic logging and alerting on errors. Replace the temporary access token with a permanent System User token.
+7. **Production** 🚧 started 2026-11-14 – GCP project `yanek-bot` in `europe-central2`, Cloud Run deploy ✅, SQLite in a bucket ✅ (Cloud SQL later), Secret Manager ✅, the Telegram webhook on the service ✅ (details in [DEPLOY.md](DEPLOY.md)). Still open: Google sign-in for the dashboard (an OAuth client), a separate development bot, basic alerting on errors. Replace the temporary access token with a permanent System User token.
 
 ### After the MVP
 

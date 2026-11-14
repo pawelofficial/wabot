@@ -1,0 +1,19 @@
+# What docker build doesn't copy (the same as .gcloudignore). Never secrets or local data.
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+db_backups/
+logs/
+.venv/
+.claude/
+.git/
+.gitignore
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+.cloudflared.log
+temp.txt
+screen*.png

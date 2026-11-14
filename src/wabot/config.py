@@ -61,6 +61,14 @@ class Settings(DatabaseSettings):
     # where the scripts send test messages (on Telegram, once that number has connected).
     whatsapp_test_recipient: str | None = None
 
+    # Cloud Run (docs/DEPLOY.md). The reply to a message (the LLM call, saving, sending) runs
+    # before the webhook answers instead of after it: Cloud Run only gives a service CPU while it
+    # handles a request, and the webhook's request is that time. Telegram waits for the answer.
+    reply_in_request: bool = False
+    # The bucket the SQLite database lives in between starts (db_sync.py): downloaded at start
+    # (deploy/start.sh), uploaded after every request that changed it. Empty: a local file only.
+    db_bucket: str = ""
+
     # How much the bot logs (logs.py): DEBUG adds each message's text, the model's instructions
     # and its raw answer; INFO what happened to each message; WARNING only problems.
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"

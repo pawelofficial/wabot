@@ -70,8 +70,8 @@ Meta ──POST /webhook──► main.receive_webhook()
        │     registered:     with body, trainee_id, trainer_id
        │     not registered: without the text (only what dedup needs)
        │     external_id already there (Meta redelivered) → rollback, skip it
-       ├─ not registered        → background.add_task(reply_unregistered, msg)
-       ├─ mentions_bot(text)    → background.add_task(reply, message.id)
+       ├─ not registered        → after_storing(reply_unregistered, msg)   (Flow 1c)
+       ├─ mentions_bot(text)    → after_storing(reply, message.id)          (Flow 1c)
        └─ otherwise             → nothing; the message waits (handled_at null) for the next
                                   "yanek", whose reply reads it too
   ◄── 200 {"status": "ok"}      (Meta gets the answer right away; the reply happens after)
@@ -153,7 +153,7 @@ Telegram ──POST /telegram/webhook──► main.receive_telegram()
   │     a (now) known trainee: with body, phone, trainee_id, trainer_id
   │     anyone else:           only what dedup needs
   │     external_id already there (Telegram redelivered) → rollback, 200
-  └─ then, in the background:
+  └─ then (main.after_storing(): after the 200 locally, before it with REPLY_IN_REQUEST on Cloud Run):
         just connected      → send_telegram_notice(TELEGRAM_LINKED, REMOVE_KEYBOARD, trainee)  stored
         unknown, own number → send_telegram_notice(UNREGISTERED, ASK_FOR_PHONE)                not stored
         unknown, anything else (/start, text, someone else's contact card)
@@ -174,6 +174,22 @@ Telegram ──POST /telegram/webhook──► main.receive_telegram()
 - **The bot token is in every API URL** (`api.telegram.org/bot<token>/sendMessage`). `telegram._call()` raises `TelegramError` with Telegram's own description and hides httpx's exception (which carries the URL); httpx's request logging is off. A failed send is logged as e.g. `sendMessage: 403 Forbidden: bot was blocked by the user`.
 - **Voice messages** need no "yanek": they're sent to the bot only, and nobody says the name into one. Telegram doesn't transcribe for bots (only Premium users, in the app), so `voice.py` downloads the recording and OpenAI transcribes it; the transcript is the stored text, so from then on a voice message is read exactly like a typed one (history, the dashboard, corrections). `called_again()` counts a later voice message as calling the bot too. The model sees it as "[wiadomość głosowa, transkrypcja] …". It's transcribed in the webhook, before storing, so no reply ever reads a voice message without its text; that makes the webhook take a few seconds for a voice message. The audio isn't kept.
 - **One history across channels**: `recent_history()` reads the trainee's messages whatever their channel, so a trainee who moves from WhatsApp to Telegram keeps the context.
+
+## Flow 1c: on Cloud Run
+
+The same webhooks, with two settings on (docs/DEPLOY.md):
+
+```
+REPLY_IN_REQUEST=true   main.after_storing(): the reply (or fixed text) runs in a thread inside the
+                        request (asyncio.to_thread), not as a background task after the 200;
+                        Cloud Run gives the container CPU only while a request runs
+DB_BUCKET=yanek-bot-db  main.keep_database_in_bucket() (middleware), after every request:
+                          db_sync.upload_if_changed(): the database or its -wal file changed
+                          since the last upload → snapshot() (SQLite's backup API) → upload()
+                          to gs://<bucket>/wabot.db; a failure is logged and retried next time
+deploy/start.sh at start: deploy/fetch_db.py (gs://<bucket>/wabot.db, else seed/wabot.db, else
+                          nothing) → alembic upgrade head → uvicorn
+```
 
 ## Flow 2: the LLM call
 

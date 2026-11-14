@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from wabot import (
     assistant,
     conversation,
+    db_sync,
     entries,
     logs,
     plans,
@@ -49,6 +50,29 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="wabot", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def keep_database_in_bucket(request: Request, call_next):
+    """With DB_BUCKET (Cloud Run): after a request that changed the database, a copy goes to the
+    bucket before the response is sent (db_sync.py), while the instance still has CPU."""
+    response = await call_next(request)
+    settings = get_settings()
+    if settings.db_bucket:
+        await asyncio.to_thread(db_sync.upload_if_changed, settings)
+    return response
+
+
+async def after_storing(settings: Settings, background: BackgroundTasks, task, *args) -> None:
+    """Run what follows a stored message (the reply, a fixed text): after the webhook has
+    answered (locally; a quick 200 for Meta and Telegram), or before it with REPLY_IN_REQUEST
+    (Cloud Run, which gives CPU only while a request runs)."""
+    if settings.reply_in_request:
+        await asyncio.to_thread(task, *args)
+    else:
+        background.add_task(task, *args)
+
+
 # The trainers' dashboard under /dashboard.
 dashboard.install(app)
 
@@ -119,11 +143,11 @@ async def receive_webhook(
         log_inbound("WhatsApp", stored, trainee, msg.text)
         # Locally these run after the 200 is sent; in production they become Cloud Tasks.
         if trainee is None:
-            background.add_task(reply_unregistered, msg)
+            await after_storing(settings, background, reply_unregistered, msg)
         elif conversation.mentions_bot(msg.text):
             # Only messages addressed to the bot by name get an answer; the rest is just stored
             # and is part of the history the next time the bot is asked.
-            background.add_task(reply, stored.id)
+            await after_storing(settings, background, reply, stored.id)
 
     return {"status": "ok"}
 
@@ -217,10 +241,12 @@ async def receive_telegram(
     log_inbound("Telegram", stored, trainee, text)
 
     if notice is None and conversation.calls_bot(msg.type, text):
-        background.add_task(reply, stored.id)
+        await after_storing(settings, background, reply, stored.id)
     if notice is not None:
         trainee_id = trainee.id if trainee is not None else None
-        background.add_task(send_telegram_notice, msg.chat_id, *notice, trainee_id)
+        await after_storing(
+            settings, background, send_telegram_notice, msg.chat_id, *notice, trainee_id
+        )
     return {"status": "ok"}
 
 

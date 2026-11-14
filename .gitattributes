@@ -1,1 +1,2 @@
+# Shell scripts run on Linux (Cloud Run, Git Bash): always LF.
 *.sh text eol=lf
