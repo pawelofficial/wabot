@@ -384,6 +384,17 @@ a.cal-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px
 .workout-table th, .workout-table td { padding: 6px 10px; }
 .workout-table .dose, .workout-table th:last-child { width: 38%; }
 .workout-message { margin: 8px 0 0; }
+
+/* The messages an entry was saved from (_conversations.html): closed until opened. */
+.conversation { margin-top: 8px; font-size: 13px; }
+.conversation summary { cursor: pointer; color: var(--accent); width: fit-content; }
+.conversation-label { margin: 10px 0 4px; }
+.chat { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.chat li { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); max-width: 640px; }
+.chat .chat-in { background: var(--surface); }
+.chat .chat-out { background: var(--accent-soft); margin-left: 24px; }
+.chat-who { font-weight: 600; }
+.chat-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
 .workout p { margin: 6px 0 0; }
 @media (max-width: 760px) {
   .calendar .week-count { width: 34px; }

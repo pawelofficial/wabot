@@ -259,12 +259,71 @@ def test_the_weight_page_shows_the_current_weight_of_each_day(client, settings, 
     assert "81,9 kg" in page and "−0,5 kg" in page  # last weight, change since the first
     assert "pt 9 paź 2026" in page
     assert "„yanek sorki, 81,9”" in page and "poprawiona" in page
-    assert "18,9" not in page and "65,0" not in page  # the replaced report, Ola's weight
+    assert "18,9 kg" not in page and "65" not in page  # the replaced report, Ola's weight
+    # The replaced report is only in the messages behind the entry.
+    assert "2 zgłoszenia" in page and "zastąpione późniejszym" in page and "yanek 18,9" in page
     data = page.split('<script type="application/json" id="weight-data">')[1].split("</script>")[0]
     assert json.loads(data) == [
         {"date": "2026-10-02", "kg": 82.4, "message": "yanek waga 82,4"},
         {"date": "2026-10-09", "kg": 81.9, "message": "yanek sorki, 81,9"},
     ]
+
+
+def test_an_entry_shows_the_messages_its_reply_read(client, settings, people):
+    # "rano 81,5" waits, "yanek zapisz" calls the bot, the first try fails (the apology), the
+    # second reads both and answers; then Kasia writes again. Ola's message comes in between.
+    kasia, ola = people["Kasia"], people["Ola"]
+    start = dt.datetime(2026, 10, 9, 7, 0, tzinfo=dt.UTC)
+    handled = start + dt.timedelta(minutes=10)
+
+    def message(trainee, minute, text, direction="in", handled_at=None):
+        return Message(
+            channel="telegram",
+            direction=direction,
+            type="text",
+            body=text,
+            phone=trainee.phone,
+            trainee_id=trainee.id,
+            trainer_id=trainee.trainer_id,
+            created_at=start + dt.timedelta(minutes=minute),
+            handled_at=handled_at,
+        )
+
+    with SessionLocal() as session:
+        session.add(message(kasia, 0, "rano 81,5", handled_at=handled))
+        session.add(message(ola, 1, "yanek 65", handled_at=handled))
+        trigger = message(kasia, 2, "yanek zapisz", handled_at=handled)
+        session.add(trigger)
+        session.add(message(kasia, 3, "Przepraszam, mam chwilowy problem.", "out"))
+        session.add(message(kasia, 4, "yanek spróbuj jeszcze raz", handled_at=handled))
+        session.add(message(kasia, 10, "Zapisałem 81,5 kg.", "out"))
+        session.add(message(kasia, 30, "dzięki"))
+        session.flush()
+        session.add(
+            WeightEntry(
+                trainer_id=kasia.trainer_id,
+                trainee_id=kasia.id,
+                date=dt.date(2026, 10, 9),
+                kg=81.5,
+                message_id=trigger.id,
+            )
+        )
+        session.commit()
+        [weigh_in] = queries.weigh_ins(session, session.get(Trainee, kasia.id))
+    [talk] = weigh_in.conversations
+    assert [(m.direction, m.body) for m in talk] == [
+        ("in", "rano 81,5"),
+        ("in", "yanek zapisz"),
+        ("out", "Przepraszam, mam chwilowy problem."),
+        ("in", "yanek spróbuj jeszcze raz"),
+        ("out", "Zapisałem 81,5 kg."),
+    ]
+
+    sign_in(client, people["Trener Marek"])
+    page = client.get(f"/dashboard/trainees/{kasia.id}/weight").text
+    assert "Pokaż wiadomości" in page and "Zapisałem 81,5 kg." in page
+    assert "dzięki" not in page and "yanek 65" not in page
+    assert "9 paź 2026, 09:02" in page  # Kasia's time (Europe/Warsaw)
 
 
 def test_the_chart_data_cant_break_out_of_its_script_tag(client, settings, people):

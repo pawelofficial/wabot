@@ -152,3 +152,18 @@ def test_a_month_of_reports_from_three_trainees(fake_llm, monkeypatch, daily_upd
             ("done", "B", "Dzień B – środa (góra ciała)"),
             ("outside", None, None),
         ]
+
+        # Tomek's day reported twice (the second adds two exercises): the dashboard shows each
+        # report's messages, his and Yanek's answer, the one that counts last.
+        tomek_scenario = next(s for s in SCENARIOS if s.key == "tomek")
+        that_day = [r for r in tomek_scenario.reports if r["at"].startswith("2026-10-15")]
+        exchanges = [
+            [("in", r["text"]), ("out", simulation.correct_answer(tomek_scenario, r)["reply"])]
+            for r in that_day
+        ]
+        tomek = session.get(Trainee, registered["tomek"].id)
+        day = dt.date(2026, 10, 15)
+        [workout] = queries.workouts(session, tomek, day, day)
+        shown = [[(m.direction, m.body) for m in talk] for talk in workout.conversations]
+        # DAILY_UPDATES_ONLY: the second report updated the row, so only its messages.
+        assert shown == (exchanges[-1:] if daily_updates_only else exchanges)

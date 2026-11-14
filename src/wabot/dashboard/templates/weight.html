@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_conversations.html" import conversations %}
 {% block title %}Waga – {{ trainee.name }}{% endblock %}
 {% block heading %}Waga – {{ trainee.name }}{% endblock %}
 {% block content %}
@@ -45,6 +46,7 @@
           <td class="message">
             {% if w.message %}„{{ w.message }}”{% endif %}
             {% if w.reports > 1 %}<span class="badge" title="Tego dnia waga była zgłoszona {{ w.reports }} razy; liczy się ostatnie zgłoszenie">poprawiona</span>{% endif %}
+            {{ conversations(w.conversations, trainee) }}
           </td>
         </tr>
         {% endfor %}

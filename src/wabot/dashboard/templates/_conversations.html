@@ -1,0 +1,23 @@
+{#- The messages an entry was saved from (queries.conversations()): each report's conversation,
+    the trainee's messages the bot read and its answer, oldest report first; the last one is the
+    entry shown. A <details>, so it's closed until the trainer opens it. -#}
+{% macro conversations(talks, trainee) -%}
+{% if talks %}
+{% set timezone = trainee.timezone or default_timezone %}
+<details class="conversation">
+  <summary>Pokaż wiadomości{% if talks|length > 1 %} ({{ talks|length|pl_count("zgłoszenie", "zgłoszenia", "zgłoszeń") }}){% endif %}</summary>
+  {% for talk in talks %}
+  {% if talks|length > 1 %}<p class="conversation-label small muted">{{ loop.index }}. zgłoszenie{% if loop.last %} – to się liczy{% else %} – zastąpione późniejszym{% endif %}</p>{% endif %}
+  <ol class="chat">
+    {% for m in talk %}
+    <li class="chat-{{ m.direction }}">
+      <span class="chat-who">{{ trainee.name if m.direction == "in" else "Yanek" }}</span>
+      <span class="muted small nowrap">{{ m.created_at|pl_datetime(timezone) }}{% if m.type == "voice" %} · wiadomość głosowa{% endif %}</span>
+      <div class="chat-text">{{ m.body or "[" ~ m.type ~ "]" }}</div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% endfor %}
+</details>
+{% endif %}
+{%- endmacro %}
