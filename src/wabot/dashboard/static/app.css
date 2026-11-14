@@ -398,6 +398,15 @@ a.cal-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .exercise-filter { margin-bottom: 8px; }
 .exercise-filter .field { min-width: 150px; }
+/* The exercise choice: checkboxes in a fold-out (several at once, no script). */
+.multi-select { position: relative; }
+.multi-select summary { cursor: pointer; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); min-width: 220px; max-width: 360px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+.multi-select[open] summary { border-color: var(--accent); }
+.multi-select-options { position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; display: grid; gap: 2px; max-height: 320px; overflow-y: auto; min-width: 280px; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / 12%); }
+.multi-select-options label { display: flex; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 4px; color: var(--text); font-size: 14px; cursor: pointer; }
+.multi-select-options label:hover { background: var(--bg); }
+.exercise-stats { margin: 4px 0 10px; padding-left: 18px; }
+@media (max-width: 760px) { .multi-select-options { position: static; min-width: 0; } .multi-select summary { max-width: none; } }
 
 /* The messages an entry was saved from (_conversations.html): closed until opened. */
 .conversation { margin-top: 8px; font-size: 13px; }

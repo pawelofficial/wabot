@@ -16,20 +16,32 @@
 {%- endmacro %}
 
 
-{# Ćwiczenia: every exercise done in the range, or one exercise's history (training_pages.ExerciseView). #}
-{# What was done of one exercise; "wg planu" when the trainee gave no numbers ("reszta wg planu"). #}
-{% macro dose(e) %}{{ e|pl_dose or ("wg planu" if e.in_plan else "—") }}{% endmacro %}
+{# What was done of one exercise (queries.Dose): the trainee's numbers, or, when they gave none
+   ("reszta wg planu"), the plan's numbers for that day, tagged „z planu". #}
+{% macro dose(d) -%}
+{%- if d.from_plan -%}
+{{ d.planned|pl_planned or "wg planu" }} <span class="badge" title="Podopieczny napisał, że zrobił to wg planu, bez liczb: to liczby z planu na ten dzień">z planu</span>
+{%- else -%}
+{{ d.exercise|pl_dose or "—" }}
+{%- endif -%}
+{%- endmacro %}
+
+{# Ćwiczenia: every exercise done in the range, or the chosen ones' history (training_pages.ExerciseView). #}
 {% macro exercise_tab(ex) %}
 <section class="card">
   <form method="get" class="inline-form exercise-filter">
     <input type="hidden" name="month" value="{{ month_param(month) }}">
     <input type="hidden" name="view" value="exercises">
-    <label class="field"><span>Ćwiczenie</span>
-      <select name="exercise">
-        <option value="">Wszystkie ćwiczenia</option>
-        {% for key, name in ex.options %}<option value="{{ key }}" {% if key == ex.chosen %}selected{% endif %}>{{ name }}</option>{% endfor %}
-      </select>
-    </label>
+    <div class="field"><span>Ćwiczenia</span>
+      <details class="multi-select">
+        <summary>{% if ex.chosen %}{{ ex.chosen_names|join(", ") }}{% else %}Wszystkie ćwiczenia{% endif %}</summary>
+        <div class="multi-select-options">
+          {% for key, name in ex.options %}
+          <label><input type="checkbox" name="exercise" value="{{ key }}" {% if key in ex.chosen %}checked{% endif %}> {{ name }}</label>
+          {% endfor %}
+        </div>
+      </details>
+    </div>
     <label class="field"><span>Od</span><input type="date" name="from" value="{{ ex.first.isoformat() if ex.first else '' }}"></label>
     <label class="field"><span>Do</span><input type="date" name="to" value="{{ ex.last.isoformat() if ex.last else '' }}"></label>
     <button type="submit" class="button primary">Pokaż</button>
@@ -52,7 +64,7 @@
           <td><a href="?month={{ month_param(month) }}&amp;view=exercises&amp;exercise={{ s.key|urlencode }}{% if ex.first %}&amp;from={{ ex.first.isoformat() }}{% endif %}{% if ex.last %}&amp;to={{ ex.last.isoformat() }}{% endif %}">{{ s.name }}</a></td>
           <td class="num">{{ s.times }}</td>
           <td class="nowrap">{{ s.last|pl_date }}</td>
-          <td class="dose nowrap">{{ dose(s.latest) }}</td>
+          <td class="dose nowrap">{{ dose(s.latest.dose) }}</td>
           <td class="num nowrap">{{ s.best_kg|pl_kg if s.best_kg is not none else "—" }}</td>
         </tr>
         {% endfor %}
@@ -64,18 +76,23 @@
   {% endif %}
 
   {% else %}
-  <h2 class="card-title">{{ ex.chosen_name }}</h2>
+  {% set several = ex.chosen|length > 1 %}
   {% if ex.stats %}
-  <p>{{ ex.stats.times|pl_count("trening", "treningi", "treningów") }}, ostatnio {{ ex.stats.last|pl_date(true) }}{% if ex.stats.best_kg is not none %}, najwięcej {{ ex.stats.best_kg|pl_kg }}{% endif %}.</p>
+  <ul class="exercise-stats">
+    {% for s in ex.stats %}
+    <li><strong>{{ s.name }}</strong>: {{ s.times|pl_count("trening", "treningi", "treningów") }}, ostatnio {{ s.last|pl_date(true) }}{% if s.best_kg is not none %}, najwięcej {{ s.best_kg|pl_kg }}{% endif %}.</li>
+    {% endfor %}
+  </ul>
   <div class="table-scroll">
     <table class="table">
-      <thead><tr><th>Dzień</th><th>Trening</th><th>Wykonanie</th><th>Uwagi</th></tr></thead>
+      <thead><tr><th>Dzień</th>{% if several %}<th>Ćwiczenie</th>{% endif %}<th>Trening</th><th>Wykonanie</th><th>Uwagi</th></tr></thead>
       <tbody>
         {% for d in ex.rows %}
         <tr>
           <td class="nowrap"><a href="?month={{ month_param(d.date) }}#d-{{ d.date.isoformat() }}">{{ d.date|pl_date(true) }}</a></td>
+          {% if several %}<td>{{ catalog[d.exercise.exercise_id].name if d.exercise.exercise_id in catalog else d.exercise.name }}</td>{% endif %}
           <td>{{ d.checkin.plan_day or ("poza planem" if d.checkin.outside_plan else "z planu") }}</td>
-          <td class="dose nowrap">{{ dose(d.exercise) }}</td>
+          <td class="dose nowrap">{{ dose(d.dose) }}</td>
           <td class="small">
             {%- if d.exercise.replaces %}zamiast: {{ catalog[d.exercise.replaces].name if d.exercise.replaces in catalog else d.exercise.replaces }}{% endif %}
             {%- if d.exercise.replaces and d.exercise.comment %}; {% endif %}
@@ -85,8 +102,11 @@
       </tbody>
     </table>
   </div>
+  {% for name in ex.chosen_names if name not in ex.stats|map(attribute="name")|list %}
+  {% if loop.first %}<p class="muted small">Bez zgłoszeń w tym okresie: {% endif %}{{ name }}{% if not loop.last %}, {% else %}.</p>{% endif %}
+  {% endfor %}
   {% else %}
-  <p class="empty">{{ trainee.name }} nie zgłosił(a) tego ćwiczenia w tym okresie.</p>
+  <p class="empty">{{ trainee.name }} nie zgłosił(a) {{ "tych ćwiczeń" if several else "tego ćwiczenia" }} w tym okresie.</p>
   {% endif %}
   {% endif %}
 </section>
@@ -203,7 +223,7 @@
                 {%- if not e.in_plan and not e.replaces and not c.outside_plan %} <span class="badge">spoza planu</span>{% endif %}
                 {%- if e.replaces %}<div class="muted small">zamiast: {{ catalog[e.replaces].name }}</div>{% endif %}
                 {%- if e.comment %}<div class="muted small">{{ e.comment }}</div>{% endif %}</td>
-              <td class="dose">{{ e|pl_dose }}</td>
+              <td class="dose">{{ dose(w.dose(e)) }}</td>
             </tr>
             {% endfor %}
           </tbody>

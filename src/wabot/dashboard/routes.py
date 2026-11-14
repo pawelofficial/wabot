@@ -82,6 +82,19 @@ def pl_dose(exercise) -> str:
     return ", ".join(part for part in (done, kg and f"{pl_number(kg)} kg") if part)
 
 
+def pl_planned(exercise) -> str:
+    """A plan exercise's numbers (plans.PlanExercise): 4 × 8, 60 kg; the weight as the trainer
+    wrote it ("2 x 16 kg", "lekko")."""
+    sets, reps = exercise.sets, exercise.reps
+    if sets and reps:
+        done = f"{sets} × {reps}"
+    elif sets:
+        done = pl_count(sets, "seria", "serie", "serii")
+    else:
+        done = reps
+    return ", ".join(part for part in (done, exercise.weight) if part)
+
+
 def pl_kg(kg: float, signed: bool = False) -> str:
     """82,4 kg; signed=True: +0,4 kg / −1,2 kg (a real minus sign)."""
     text = f"{abs(kg) if signed else kg:.1f}".replace(".", ",") + " kg"
@@ -97,6 +110,7 @@ templates.env.filters["pl_number"] = pl_number
 templates.env.filters["pl_dose"] = pl_dose
 templates.env.filters["pl_datetime"] = pl_datetime
 templates.env.filters["pl_count"] = pl_count
+templates.env.filters["pl_planned"] = pl_planned
 # Trainers have no timezone of their own yet; their times are shown in this one.
 templates.env.globals["default_timezone"] = DEFAULT_TIMEZONE
 router = APIRouter(prefix="/dashboard", default_response_class=HTMLResponse)

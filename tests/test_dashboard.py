@@ -1153,11 +1153,14 @@ def test_the_exercises_tab_sums_up_each_exercise(client, settings, people):
     summary = {s.name: s for s in response.context["ex"].summary}
     squats = summary[NAME["back_squat"]]
     assert (squats.times, squats.last, squats.best_kg) == (3, october(20), 105.0)
-    assert squats.latest.weight_kg == 102.5  # the correction, not the 120
+    assert squats.latest.exercise.weight_kg == 102.5  # the correction, not the 120
     assert summary["Bieg 5 km"].times == 1  # outside the plan, by name
-    assert summary[NAME["leg_curl"]].latest.sets is None  # reported without numbers
+    # Reported without numbers ("reszta wg planu"): the plan's numbers for that day, tagged.
+    assert summary[NAME["leg_curl"]].latest.dose.from_plan
+    assert summary[NAME["leg_curl"]].best_kg == 40.0  # the plan's "40 kg"
     page = response.text
-    assert "4 × 5, 102,5 kg" in page and "wg planu" in page and "200" not in page
+    assert "4 × 5, 102,5 kg" in page and "200" not in page
+    assert '3 × 12, 40 kg <span class="badge"' in page and ">z planu</span>" in page
     assert list(summary)[0] == NAME["back_squat"]  # the most frequent first
 
 
@@ -1183,9 +1186,11 @@ def test_one_exercises_history_in_a_range(client, settings, people):
     response = exercises_page(client, kasia, "&exercise=back_squat&from=2026-10-10")
     ex_view = response.context["ex"]
     assert [d.date.day for d in ex_view.rows] == [20, 13]  # newest first, from the 10th
-    assert (ex_view.stats.times, ex_view.stats.best_kg) == (2, 110.0)
+    [stats] = ex_view.stats
+    assert (stats.times, stats.best_kg) == (2, 110.0)
     page = response.text
     assert "2 treningi, ostatnio wt 20 paź 2026, najwięcej 110,0 kg" in page
+    assert "<th>Ćwiczenie</th><th>Trening</th>" not in page  # one exercise: no such column
     assert 'href="?month=2026-10#d-2026-10-13"' in page  # to that day in the calendar
 
     rows = exercises_page(client, kasia, "&exercise=leg_press").context["ex"].rows
@@ -1218,9 +1223,70 @@ def test_a_wrong_filter_shows_everything(client, settings, people):
     response = exercises_page(client, kasia, "&exercise=nonsense&from=never&to=2026-13-40")
     assert response.status_code == 200
     ex_view = response.context["ex"]
-    assert (ex_view.chosen, ex_view.first, ex_view.last) == ("", None, None)
+    assert (ex_view.chosen, ex_view.first, ex_view.last) == ([], None, None)
     assert [s.name for s in ex_view.summary] == [NAME["back_squat"]]
     # Another trainer's trainee: not found, as everywhere.
     client.cookies.clear()
     sign_in(client, people["Trenerka Ewa"])
     assert exercises_page(client, kasia).status_code == 404
+
+
+def test_several_exercises_at_once(client, settings, people):
+    kasia = people["Kasia"]
+    give_plan(kasia)
+    add_training(
+        kasia,
+        october(6),
+        "yanek dół",
+        "Wtorek – dół 1",
+        [squat(100), ex("leg_curl", "Uginanie", sets=3, reps="12", weight_kg=40)],
+    )
+    add_training(kasia, october(13), "yanek dół", "Wtorek – dół 1", [squat(105)])
+    sign_in(client, people["Trener Marek"])
+    response = exercises_page(
+        client, kasia, "&exercise=leg_curl&exercise=back_squat&exercise=calf_raise"
+    )
+    ex_view = response.context["ex"]
+    # In the options' order (the most frequent first), whatever the address's order.
+    assert ex_view.chosen == ["back_squat", "leg_curl", "calf_raise"]
+    assert [(d.date.day, d.exercise.exercise_id) for d in ex_view.rows] == [
+        (13, "back_squat"),
+        (6, "back_squat"),
+        (6, "leg_curl"),
+    ]
+    assert [s.name for s in ex_view.stats] == [NAME["back_squat"], NAME["leg_curl"]]
+    page = response.text
+    assert "<th>Ćwiczenie</th><th>Trening</th>" in page  # several: which one each row is
+    assert f"Bez zgłoszeń w tym okresie: {NAME['calf_raise']}" in page
+    assert page.count('type="checkbox" name="exercise"') == len(ex_view.options)
+    assert page.count("checked>") == 3
+
+
+def test_the_plans_numbers_only_where_the_trainee_gave_none(client, settings, people):
+    kasia = people["Kasia"]
+    give_plan(kasia)
+    tuesday = [
+        squat(100),  # reported: as reported
+        ex("romanian_deadlift", "RDL"),  # "reszta wg planu": the plan's
+        ex("leg_press", "Suwnica", in_plan=False, replaces="leg_curl"),  # a replacement: not
+    ]
+    add_training(kasia, october(6), "yanek dół, reszta wg planu", "Wtorek – dół 1", tuesday)
+    sign_in(client, people["Trener Marek"])
+    with SessionLocal() as session:
+        [workout] = queries.workouts(
+            session, session.get(Trainee, kasia.id), october(6), october(6)
+        )
+        doses = {e.exercise_id: workout.dose(e) for e in workout.checkin.exercises}
+    assert not doses["back_squat"].from_plan
+    assert doses["romanian_deadlift"].planned.sets == 3 and doses["romanian_deadlift"].kg == 80.0
+    assert not doses["leg_press"].from_plan
+    page = client.get(f"/dashboard/trainees/{kasia.id}/trainings?month=2026-10").text
+    assert '3 × 8, 80 kg <span class="badge"' in page  # the Treningi tab too
+
+
+@pytest.mark.parametrize(
+    ("text", "kg"),
+    [("80 kg", 80.0), ("ok. 62,5 kg", 62.5), ("2 x 16 kg", 16.0), ("lekko", None), (None, None)],
+)
+def test_a_plans_weight_as_a_number(text, kg):
+    assert queries.plan_kg(text) == kg

@@ -1,7 +1,8 @@
 """Treningi: the trainee's training calendar, a month at a time (?month=2026-10), and below it
 two tabs: the month's trainings with everything reported (docs/PLAN.md, "Training calendar"),
-and Ćwiczenia (?view=exercises): every exercise done, a summary per exercise or one exercise's
-history (&exercise=back_squat), over a date range (&from=…&to=…, the whole history by default).
+and Ćwiczenia (?view=exercises): every exercise done, a summary per exercise or the history
+of the chosen ones (&exercise=back_squat, repeated for several), over a date range
+(&from=…&to=…, the whole history by default).
 
 A day shows its current trainings (queries.workouts()): the plan's, coloured by its status and
 labelled with its plan day's letter, and one outside the plan. Clicking a day jumps to its
@@ -87,7 +88,7 @@ def trainings(
     trainee: TraineeDep,
     month: str | None = None,
     view: str | None = None,
-    exercise: str | None = None,
+    exercise: Annotated[list[str] | None, Query()] = None,
     from_: Annotated[str | None, Query(alias="from")] = None,
     to: str | None = None,
 ):
@@ -130,7 +131,7 @@ def trainings(
         month_param=month_param,
         catalog=exercises.BY_ID,
         view="exercises" if view == "exercises" else "trainings",
-        ex=exercise_view(session, trainee, current, exercise, from_, to)
+        ex=exercise_view(session, trainee, current, exercise or [], from_, to)
         if view == "exercises"
         else None,
     )
@@ -148,18 +149,22 @@ class ExerciseView:
     """What the Ćwiczenia tab shows."""
 
     options: list[tuple[str, str]]  # (key, name): every exercise done, then the plan's others
-    chosen: str  # an option's key, or "" for the summary of all
-    chosen_name: str | None
+    chosen: list[str]  # option keys, in the options' order; none: the summary of all
     first: dt.date | None  # the range asked (None: from the first training)
     last: dt.date | None
     earliest: dt.date | None  # the trainee's first and last training with exercises
     latest: dt.date | None
     summary: list[queries.ExerciseSummary]  # all exercises in the range (nothing chosen)
-    rows: list[queries.ExerciseDone]  # the chosen exercise's, newest first
-    stats: queries.ExerciseSummary | None  # the chosen exercise's, in the range
+    rows: list[queries.ExerciseDone]  # the chosen exercises', newest first
+    stats: list[queries.ExerciseSummary]  # each chosen exercise's done in the range
+
+    @property
+    def chosen_names(self) -> list[str]:
+        names = dict(self.options)
+        return [names[key] for key in self.chosen]
 
 
-def exercise_view(session, trainee, plan, exercise, from_, to) -> ExerciseView:
+def exercise_view(session, trainee, plan, asked: list[str], from_, to) -> ExerciseView:
     everything = queries.exercises_done(session, trainee)
     options = [(s.key, s.name) for s in queries.summarize(everything)]
     known = {key for key, _ in options}
@@ -174,20 +179,18 @@ def exercise_view(session, trainee, plan, exercise, from_, to) -> ExerciseView:
         for d in everything
         if (first is None or d.date >= first) and (last is None or d.date <= last)
     ]
-    chosen = exercise if exercise in known else ""
-    rows = [d for d in done if queries.exercise_key(d.exercise) == chosen] if chosen else []
-    stats = queries.summarize(rows)
+    chosen = [key for key, _ in options if key in set(asked)]
+    rows = [d for d in done if queries.exercise_key(d.exercise) in chosen]
     return ExerciseView(
         options=options,
         chosen=chosen,
-        chosen_name=dict(options).get(chosen),
         first=first,
         last=last,
         earliest=min((d.date for d in everything), default=None),
         latest=max((d.date for d in everything), default=None),
         summary=[] if chosen else queries.summarize(done),
         rows=rows,
-        stats=stats[0] if stats else None,
+        stats=queries.summarize(rows),
     )
 
 

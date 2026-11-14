@@ -7,6 +7,7 @@ current_per_day() and workouts() apply that rule, so the pages don't each repeat
 """
 
 import datetime as dt
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -22,7 +23,7 @@ from wabot.models import (
     TrainingExercise,
     WeightEntry,
 )
-from wabot.plans import TrainingPlan
+from wabot.plans import PlanDay, PlanExercise, TrainingPlan
 
 
 def _newest_ids(model, trainee: Trainee, *keys):
@@ -132,6 +133,62 @@ def weigh_ins(session: Session, trainee: Trainee) -> list[WeighIn]:
     ]
 
 
+def plan_kg(weight: str | None) -> float | None:
+    """The number of a plan's weight text: "ok. 60 kg" → 60, "2 x 16 kg" → 16 (per dumbbell, as
+    reported weights are saved), "lekko" → None."""
+    found = re.findall(r"(\d+(?:[.,]\d+)?)\s*kg", weight or "", re.IGNORECASE)
+    return float(found[-1].replace(",", ".")) if found else None
+
+
+@dataclass
+class Dose:
+    """What was done of one reported exercise: the trainee's numbers, or, when they gave none
+    ("reszta wg planu"), the plan's for that exercise on that day (`planned`), from the plan
+    version the training was checked against."""
+
+    exercise: TrainingExercise
+    planned: PlanExercise | None = None
+
+    @property
+    def from_plan(self) -> bool:
+        return self.planned is not None
+
+    @property
+    def kg(self) -> float | None:
+        return plan_kg(self.planned.weight) if self.planned else self.exercise.weight_kg
+
+
+def dose_of(exercise: TrainingExercise, day: PlanDay | None) -> Dose:
+    """The exercise's Dose: the plan's numbers only for a plan exercise reported without any
+    (not a replacement, which has its own exercise)."""
+    reported = any(v is not None for v in (exercise.sets, exercise.reps, exercise.weight_kg))
+    if day is None or reported or not exercise.in_plan or exercise.replaces:
+        return Dose(exercise)
+    planned = next((e for e in day.exercises if e.id == exercise.exercise_id), None)
+    return Dose(exercise, planned)
+
+
+def plan_versions(session: Session, trainee: Trainee, checkins) -> dict[int, TrainingPlan]:
+    """The plan versions the trainings were checked against (each the trainee's own)."""
+    ids = {c.plan_version_id for c in checkins if c.plan_version_id}
+    if not ids:
+        return {}
+    return {
+        v.id: TrainingPlan.model_validate(v.plan)
+        for v in session.scalars(
+            select(TraineePlan).where(TraineePlan.trainee_id == trainee.id, TraineePlan.id.in_(ids))
+        )
+    }
+
+
+def plan_day_of(checkin: TrainingCheckin, versions: dict[int, TrainingPlan]) -> PlanDay | None:
+    """The plan day a training was checked against, from its version (None outside the plan)."""
+    version = versions.get(checkin.plan_version_id)
+    if version is None or not checkin.plan_day_id:
+        return None
+    return next((d for d in version.days if d.id == checkin.plan_day_id), None)
+
+
 @dataclass
 class Workout:
     """One of a day's current trainings: the newest report of its kind (the plan's, or outside
@@ -150,6 +207,11 @@ class Workout:
     planned: int | None
     # The conversation of each report of this kind that day, oldest first (the last one counts).
     conversations: list[list[Message]] = field(default_factory=list)
+    # The plan day it was checked against (for the plan's numbers, dose()).
+    day: PlanDay | None = None
+
+    def dose(self, exercise: TrainingExercise) -> Dose:
+        return dose_of(exercise, self.day)
 
     @property
     def kind(self) -> str:
@@ -221,16 +283,7 @@ def workouts(session: Session, trainee: Trainee, first: dt.date, last: dt.date) 
     reports = Counter((c.date, c.outside_plan) for c in every_report)
     talks = _reports(session, trainee, every_report, lambda c: (c.date, c.outside_plan))
     messages = _messages(session, checkins)
-    # The plan versions the trainings were checked against (each the trainee's own).
-    versions = {
-        v.id: TrainingPlan.model_validate(v.plan)
-        for v in session.scalars(
-            select(TraineePlan).where(
-                TraineePlan.trainee_id == trainee.id,
-                TraineePlan.id.in_({c.plan_version_id for c in checkins if c.plan_version_id}),
-            )
-        )
-    }
+    versions = plan_versions(session, trainee, checkins)
     current_version = trainee.plan_version
     current = versions.get(current_version.id) if current_version else None
     if current_version is not None and current is None:
@@ -241,11 +294,7 @@ def workouts(session: Session, trainee: Trainee, first: dt.date, last: dt.date) 
     found = []
     for c in checkins:
         version = versions.get(c.plan_version_id)
-        day = (
-            next((d for d in version.days if d.id == c.plan_day_id), None)
-            if version is not None and c.plan_day_id
-            else None
-        )
+        day = plan_day_of(c, versions)
         if c.plan_day_id in current_labels:
             label = current_labels[c.plan_day_id]
             renamed = current_names[c.plan_day_id] != c.plan_day
@@ -262,6 +311,7 @@ def workouts(session: Session, trainee: Trainee, first: dt.date, last: dt.date) 
                 current_name=current_name,
                 planned=len(day.exercises) if day is not None else None,
                 conversations=talks.get((c.date, c.outside_plan), []),
+                day=day,
             )
         )
     return found
@@ -294,10 +344,15 @@ class ExerciseDone:
 
     checkin: TrainingCheckin
     exercise: TrainingExercise
+    day: PlanDay | None = None  # the plan day it was checked against
 
     @property
     def date(self) -> dt.date:
         return self.checkin.date
+
+    @property
+    def dose(self) -> Dose:
+        return dose_of(self.exercise, self.day)
 
 
 def exercises_done(
@@ -310,13 +365,16 @@ def exercises_done(
         newest = newest.where(TrainingCheckin.date >= first)
     if last is not None:
         newest = newest.where(TrainingCheckin.date <= last)
-    checkins = session.scalars(
-        select(TrainingCheckin)
-        .where(TrainingCheckin.id.in_(newest))
-        .options(selectinload(TrainingCheckin.exercises))
-        .order_by(TrainingCheckin.date.desc(), TrainingCheckin.id.desc())
+    checkins = list(
+        session.scalars(
+            select(TrainingCheckin)
+            .where(TrainingCheckin.id.in_(newest))
+            .options(selectinload(TrainingCheckin.exercises))
+            .order_by(TrainingCheckin.date.desc(), TrainingCheckin.id.desc())
+        )
     )
-    return [ExerciseDone(c, e) for c in checkins for e in c.exercises]
+    versions = plan_versions(session, trainee, checkins)
+    return [ExerciseDone(c, e, plan_day_of(c, versions)) for c in checkins for e in c.exercises]
 
 
 @dataclass
@@ -327,9 +385,8 @@ class ExerciseSummary:
     name: str
     times: int  # trainings it was in
     last: dt.date
-    best_kg: float | None  # the heaviest weight reported
-    # The newest time it was done ("reszta wg planu" leaves no numbers: then the plan's).
-    latest: TrainingExercise
+    best_kg: float | None  # the heaviest weight (the plan's where the trainee gave none)
+    latest: ExerciseDone  # the newest time it was done
 
 
 def summarize(done: list[ExerciseDone]) -> list[ExerciseSummary]:
@@ -339,7 +396,7 @@ def summarize(done: list[ExerciseDone]) -> list[ExerciseSummary]:
         by_key.setdefault(exercise_key(d.exercise), []).append(d)
     found = []
     for key, rows in by_key.items():
-        weights = [r.exercise.weight_kg for r in rows if r.exercise.weight_kg is not None]
+        weights = [r.dose.kg for r in rows if r.dose.kg is not None]
         found.append(
             ExerciseSummary(
                 key=key,
@@ -347,7 +404,7 @@ def summarize(done: list[ExerciseDone]) -> list[ExerciseSummary]:
                 times=len({r.checkin.id for r in rows}),
                 last=max(r.date for r in rows),
                 best_kg=max(weights) if weights else None,
-                latest=max(rows, key=lambda r: (r.date, r.checkin.id)).exercise,
+                latest=max(rows, key=lambda r: (r.date, r.checkin.id)),
             )
         )
     return sorted(found, key=lambda s: (-s.times, s.name.lower()))
