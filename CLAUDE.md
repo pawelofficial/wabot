@@ -23,7 +23,8 @@ uv run python scripts/send_test.py       # check the messenger: Telegram prints 
 uv run python scripts/send_test_custom_first_message.py [--dry-run]   # bot-started message, composed by the app
 uv run python scripts/simulate_month.py [--only kasia]  # scenarios/*.yaml through the real model into simulated_month.db (not wabot.db)
 uv run python scripts/simulate_month.py --canned   # the same with the correct answers from the scenarios, no OpenAI
-bash run_dashboard.sh                    # dashboard at /dashboard on simulated_month.db (--canned if missing, migrated), dev login
+bash run_dashboard.sh                    # dashboard at :8001/dashboard on DATABASE_URL's database (migrated), dev login
+uv run python scripts/setup_db.py [--simulated] [--new dev.db]   # create/migrate the database; --simulated adds the simulated month (backup first)
 ```
 
 ## Code layout
@@ -51,7 +52,9 @@ bash run_dashboard.sh                    # dashboard at /dashboard on simulated_
 - `scripts/add_trainee.py` – registers or updates a trainee and their trainer (`--trainer-email` for dashboard sign-in) until the dashboard does it; plans can also be edited in the dashboard
 - `alembic/` – migrations; `UTCDateTime` is rendered as plain `DateTime(timezone=True)`
 
-The dashboard is developed on the simulation's data (`simulated_month.db`, built by the same migrations), so the simulated trainers and trainees must have every field real ones have: when a change adds a column or a field the dashboard needs, give it a value in `scenarios/*.yaml` / `simulation.register()` in the same change (`test_simulated_trainers_and_trainees_have_every_field_filled` fails otherwise).
+`DATABASE_URL` (`.env`, `sqlite:///wabot.db`) is the one database everything uses: the bot (it logs it at startup), the dashboard, alembic and the scripts; only `scripts/simulate_month.py` writes its own scratch `simulated_month.db`, which it recreates.
+
+The dashboard is developed on the simulation's data (`scripts/setup_db.py --simulated` adds it to the database, built by the same migrations), so the simulated trainers and trainees must have every field real ones have: when a change adds a column or a field the dashboard needs, give it a value in `scenarios/*.yaml` / `simulation.register()` in the same change (`test_simulated_trainers_and_trainees_have_every_field_filled` fails otherwise).
 
 `docs/CONVERSATION.md` is the design of the conversation handling: the cases (a report, several messages, corrections, clarifying questions and their answers, ...), the planned `ConversationHandler` class and the fallbacks; a draft for review, so check it before changing how replies work, and keep it in sync.
 

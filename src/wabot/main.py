@@ -8,6 +8,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -36,6 +37,8 @@ logs.setup(get_settings())
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    # Which database this process uses (DATABASE_URL), so it's never a guess.
+    log.info("Database: %s", make_url(settings.database_url).render_as_string(hide_password=True))
     if missing := settings.missing_for_channel():
         log.warning(
             "CHANNEL=%s, but %s isn't set in .env: the bot can't send or receive messages",

@@ -120,31 +120,35 @@ uv run python scripts/simulate_month.py --only tomek           # one trainee
 uv run python scripts/simulate_month.py --daily-updates-only  # one row per day
 ```
 
-The trainees and their messages are in `scenarios/*.yaml`: Kasia (`plans/example.yaml`), Tomek (`plans/upper_lower.yaml`) and Ola (`plans/beginner_fbw.yaml`). The script sends the messages in time order through the bot's reply flow at simulated times and prints each reply and what was saved. Uses the OpenAI key from `.env` (one call per message) and its own database, `simulated_month.db`, which is recreated on every run (with the same migrations as `wabot.db`) and kept afterwards; the dashboard runs on it. `--canned` gives the correct answers from the scenario files instead of calling OpenAI. Nothing goes to Telegram or WhatsApp and `wabot.db` isn't touched.
+The trainees and their messages are in `scenarios/*.yaml`: Kasia (`plans/example.yaml`), Tomek (`plans/upper_lower.yaml`) and Ola (`plans/beginner_fbw.yaml`). The script sends the messages in time order through the bot's reply flow at simulated times and prints each reply and what was saved. Uses the OpenAI key from `.env` (one call per message) and its own scratch database, `simulated_month.db`, which is recreated on every run (with the same migrations as `wabot.db`) and kept afterwards; `DATABASE_URL=sqlite:///simulated_month.db bash run_dashboard.sh` shows it in the dashboard. `--canned` gives the correct answers from the scenario files instead of calling OpenAI. Nothing goes to Telegram or WhatsApp and `wabot.db` isn't touched.
 
 ### Dashboard
 
-`bash run_dashboard.sh` does this (filling `simulated_month.db` with `--canned` if it doesn't exist yet):
+### Database
+
+`DATABASE_URL` in `.env` (`sqlite:///wabot.db`) is the one database the bot, the dashboard, migrations and every script use; the bot logs it at startup. `scripts/setup_db.py` creates or migrates it, `--simulated` adds the simulated month (Trener Marek with Kasia and Tomek, Trenerka Ewa with Ola, their plan libraries and a month of reports, from the scenarios' correct answers, after a backup to `db_backups/`), and `--new dev.db` makes a new empty database and prints the `.env` line for it:
 
 ```bash
-uv run python scripts/simulate_month.py --canned   # fill simulated_month.db without OpenAI calls (or run it without --canned: the real model)
-DATABASE_URL=sqlite:///simulated_month.db DASHBOARD_DEV_LOGIN=true uv run uvicorn wabot.main:app --reload
+uv run python scripts/setup_db.py --simulated
+uv run python scripts/setup_db.py --new dev.db
 ```
 
-Open http://localhost:8000/dashboard and pick a trainer (Trener Marek has Kasia and Tomek, Trenerka Ewa has Ola). `DASHBOARD_DEV_LOGIN` signs in without a password, so it's for local use only.
+### Dashboard
+
+`bash run_dashboard.sh` starts it on the same database as the bot, with the dev login, on port 8001 (next to the bot on 8000). Open http://localhost:8001/dashboard and pick a trainer. `DASHBOARD_DEV_LOGIN` signs in without a password, so it's for local use only.
 
 Google sign-in (needs a Google Cloud project, free; it doesn't need to be the production one):
 
 1. console.cloud.google.com → APIs & Services → OAuth consent screen: External, app name "Yanek",
    your email; while it's in "Testing", add each trainer's Google account under Test users.
 2. Credentials → Create credentials → OAuth client ID → Web application. Authorized JavaScript
-   origins: `http://localhost` and `http://localhost:8000` (later the production URL). No
+   origins: `http://localhost`, `http://localhost:8000` and `http://localhost:8001` (later the production URL). No
    redirect URI needed.
 3. In `.env`: `GOOGLE_CLIENT_ID=<the client ID>` and `DASHBOARD_SESSION_SECRET=<random>`
    (make one with `uv run python -c "import secrets; print(secrets.token_urlsafe(32))"`).
-4. Give a trainer your Google email, e.g. on the simulated data Trener Marek (Kasia's trainer):
-   `DATABASE_URL=sqlite:///simulated_month.db uv run python scripts/add_trainee.py --phone 48000000001 --trainer-email you@gmail.com`
-   (without `DATABASE_URL=...` it changes `wabot.db`). Running the simulation again resets it.
+4. Give a trainer your Google email, e.g. Trener Marek (Kasia's trainer) of the simulated month:
+   `uv run python scripts/add_trainee.py --phone 48000000001 --trainer-email you@gmail.com`
+   (in the database `DATABASE_URL` points to).
 
 ### Tests and lint
 

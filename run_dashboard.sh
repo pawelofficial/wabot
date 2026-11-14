@@ -1,31 +1,22 @@
 #!/usr/bin/env bash
-# Start the dashboard locally on the simulation's data (simulated_month.db), with the dev login
-# (pick a trainer, no password), at http://localhost:8000/dashboard. No tunnel, no WhatsApp.
-# If the database doesn't exist yet, it's filled with the scenarios' correct answers (no OpenAI
-# calls); run scripts/simulate_month.py yourself for the real model's data.
+# Start the dashboard locally with the dev login (pick a trainer, no password), at
+# http://localhost:8001/dashboard, on the database DATABASE_URL points to (.env; the same one the
+# bot uses, default wabot.db). Port 8001, so it runs next to run.sh's bot on 8000. No tunnel,
+# no messenger. An empty database: scripts/setup_db.py (--simulated adds the simulated month).
 # Usage: bash run_dashboard.sh [extra uvicorn args]
-#   PORT=8001 bash run_dashboard.sh      # another port
-#   DB=wabot.db bash run_dashboard.sh    # another database, e.g. the real local one
+#   PORT=8002 bash run_dashboard.sh                           # another port
+#   DATABASE_URL=sqlite:///dev.db bash run_dashboard.sh       # another database, just this once
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PORT="${PORT:-8000}"
-DB="${DB:-simulated_month.db}"
-
-if [[ ! -f "$DB" ]]; then
-    if [[ "$DB" != simulated_month.db ]]; then
-        echo "$DB doesn't exist." >&2
-        exit 1
-    fi
-    echo "No $DB yet - filling it with the scenarios' correct answers (no OpenAI calls)."
-    uv run python scripts/simulate_month.py --canned >/dev/null
-fi
+PORT="${PORT:-8001}"
 
 # An older database gets the new tables (its data stays).
-DATABASE_URL="sqlite:///$DB" uv run alembic upgrade head
+uv run alembic upgrade head
 
-echo "Dashboard on $DB: http://localhost:$PORT/dashboard"
-# Its own log file, so it can run next to run.sh (logs/wabot.log).
-DATABASE_URL="sqlite:///$DB" DASHBOARD_DEV_LOGIN=true LOG_FILE="${LOG_FILE:-logs/dashboard.log}" \
-    uv run uvicorn wabot.main:app --reload --reload-include "*.html" --reload-include "*.css" \
-    --reload-include "*.js" --port "$PORT" "$@"
+echo "Dashboard: http://localhost:$PORT/dashboard"
+# Its own log file, so it can run next to run.sh (logs/wabot.log). The bot logs the database it
+# uses at startup.
+DASHBOARD_DEV_LOGIN=true LOG_FILE="${LOG_FILE:-logs/dashboard.log}" \
+    uv run uvicorn wabot.main:app --reload --reload-dir src --reload-include "*.html" \
+    --reload-include "*.css" --reload-include "*.js" --reload-include "*.yaml" --port "$PORT" "$@"

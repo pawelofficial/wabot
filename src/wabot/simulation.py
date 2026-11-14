@@ -169,6 +169,25 @@ def correct_answer(scenario: Scenario, report: dict) -> dict:
     return out
 
 
+def load_canned(scenarios: list[Scenario] | None = None) -> dict[str, Trainee]:
+    """Add the scenarios' trainers and trainees (with their plans in the trainers' libraries)
+    to the database and replay their month through the bot's reply flow with the correct
+    answers, no OpenAI: what scripts/setup_db.py --simulated adds. Returns the trainees by
+    scenario key."""
+    scenarios = scenarios if scenarios is not None else load_all()
+    settings = main.get_settings().model_copy(update={"openai_api_key": "canned"})
+    registered = {s.key: register(s) for s in scenarios}
+    with (
+        mock.patch.object(main, "get_settings", lambda: settings),
+        Replay() as replay,
+        canned_llm() as canned,
+    ):
+        for at, scenario, report in timeline(scenarios):
+            canned.answers.append(correct_answer(scenario, report))
+            replay.send(registered[scenario.key], report["text"], at)
+    return registered
+
+
 @contextlib.contextmanager
 def canned_llm():
     """OpenAI replaced by a client that returns the answers queued in `.answers`, in order;

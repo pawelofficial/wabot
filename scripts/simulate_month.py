@@ -173,9 +173,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"  {day} {day:%a}  " + "; ".join(parts))
         print()
     print(f"Saved in {args.db}. The dashboard on this data:")
-    print(
-        f"  DATABASE_URL=sqlite:///{args.db} DASHBOARD_DEV_LOGIN=true uv run uvicorn wabot.main:app"
-    )
+    print(f"  DATABASE_URL=sqlite:///{args.db} bash run_dashboard.sh")
 
 
 if __name__ == "__main__":

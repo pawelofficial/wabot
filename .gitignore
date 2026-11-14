@@ -219,8 +219,12 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Local SQLite database
+# Local SQLite databases (scripts/setup_db.py --new) and their backups
 wabot.db*
+*.db
+*.db-wal
+*.db-shm
+db_backups/
 
 # Scratch files that may contain tokens or IDs
 temp.txt

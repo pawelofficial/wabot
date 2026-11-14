@@ -37,7 +37,8 @@ A walk through what happens at runtime: which function calls which, in what orde
 | `scenarios/*.yaml` | A month of reports per simulated trainee (Kasia, Tomek, Ola: one plan each, two trainers): the messages, the answer a correct model gives, and what must be saved. The format is explained at the top of `kasia.yaml` |
 | `src/wabot/simulation.py` | Replays the scenarios through `main.reply()` at simulated times (used by the month test and `scripts/simulate_month.py`, not by the app) |
 | `run.sh` | Local start: migrate, messenger check, tunnel, webhook (of `CHANNEL`), uvicorn |
-| `run_dashboard.sh` | Local dashboard: uvicorn on `simulated_month.db` with the dev login (fills it with `--canned` if it's missing) |
+| `run_dashboard.sh` | Local dashboard: uvicorn on port 8001 on `DATABASE_URL`'s database (migrated first) with the dev login |
+| `scripts/setup_db.py` | Creates or migrates `DATABASE_URL`'s database (or `--new FILE`); `--simulated` backs it up to `db_backups/` and adds the simulated month (`simulation.load_canned()`: `register()` each scenario, then its reports through `main.reply()` with the correct answers) |
 | `scripts/` | One-off command-line tools (see Flows 3 and 5) |
 
 ## What happens at import / startup
@@ -448,7 +449,7 @@ So a trainer gets access when the operator gives their trainer row their Google 
 
 **Dev login** (`DASHBOARD_DEV_LOGIN=True`, local only): the login page also lists every trainer, and `POST /dashboard/login/dev` signs in as the one clicked, no Google. Without the setting, `/login/dev` answers 404. `POST /dashboard/logout` deletes the cookie.
 
-**Data to look at locally:** the simulation's database. `uv run python scripts/simulate_month.py` (real model) or `uv run python scripts/simulate_month.py --canned` (the correct answers, no OpenAI) builds `simulated_month.db` with the same migrations as `wabot.db` and fills it with the three scenario trainees and their trainers, emails included; then `DATABASE_URL=sqlite:///simulated_month.db DASHBOARD_DEV_LOGIN=true uv run uvicorn wabot.main:app --reload` and open http://localhost:8000/dashboard.
+**Data to look at locally:** `uv run python scripts/setup_db.py --simulated` adds the three scenario trainees and their trainers (emails and plan libraries included) with their month of reports to the database `DATABASE_URL` points to (the same one the bot uses); then `bash run_dashboard.sh` and open http://localhost:8001/dashboard. `scripts/simulate_month.py` (the real model, or `--canned`) writes the same into its own scratch `simulated_month.db` instead, recreated every run: `DATABASE_URL=sqlite:///simulated_month.db bash run_dashboard.sh` shows it.
 
 ## The database
 
@@ -506,7 +507,8 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 | change what gets logged, or the rotation | `log.info()` / `log.debug()` lines in `main.py` and `assistant.py`; `MAX_BYTES`, `BACKUPS`, `QUIET` in `logs.py` |
 | change the retry count | `ATTEMPTS` in `assistant.py` |
 | change plausibility limits | constants at the top of `llm_output.py` |
-| look at the dashboard with data | `uv run python scripts/simulate_month.py --canned` (or without `--canned`), then run uvicorn with `DATABASE_URL=sqlite:///simulated_month.db DASHBOARD_DEV_LOGIN=true` (Flow 6) |
+| look at the dashboard with data | `uv run python scripts/setup_db.py --simulated` once, then `bash run_dashboard.sh` (Flow 6) |
+| start from an empty database | `uv run python scripts/setup_db.py --new dev.db`, put the `DATABASE_URL` line it prints into `.env`, restart `run.sh` / `run_dashboard.sh` |
 | let a trainer sign in with Google | `uv run python scripts/add_trainee.py --phone <a trainee of theirs> --trainer-email them@gmail.com`; `GOOGLE_CLIENT_ID` and `DASHBOARD_SESSION_SECRET` in `.env` (README) |
 | add a column to trainers or trainees | the model + a migration, and a value for the simulated people in `scenarios/*.yaml` / `simulation.register()` (a test checks none is empty) |
 | change what the training calendar shows | `queries.Workout` (the mark, the words, the letter), `templates/trainings.html`, the `.mark` / `.calendar` styles and the status colours (`--done`, `--partial`, `--skipped`, `--outside`) in `app.css` |
