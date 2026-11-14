@@ -32,13 +32,18 @@
   <form method="get" class="inline-form exercise-filter">
     <input type="hidden" name="month" value="{{ month_param(month) }}">
     <input type="hidden" name="view" value="exercises">
-    <div class="field"><span>Ćwiczenia</span>
-      <details class="multi-select">
-        <summary>{% if ex.chosen %}{{ ex.chosen_names|join(", ") }}{% else %}Wszystkie ćwiczenia{% endif %}</summary>
-        <div class="multi-select-options">
-          {% for key, name in ex.options %}
-          <label><input type="checkbox" name="exercise" value="{{ key }}" {% if key in ex.chosen %}checked{% endif %}> {{ name }}</label>
-          {% endfor %}
+    <div class="filter-field"><span class="filter-label" id="exercise-label">Ćwiczenia</span>
+      <details class="multi-select" data-multi-select>
+        <summary aria-labelledby="exercise-label">{% if ex.chosen %}{{ ex.chosen_names|join(", ") }}{% else %}Wszystkie ćwiczenia{% endif %}</summary>
+        <div class="multi-select-panel">
+          <input type="search" class="multi-select-search" placeholder="Szukaj ćwiczenia…" aria-label="Szukaj ćwiczenia" autocomplete="off" data-multi-search hidden>
+          <label class="multi-option multi-option-all"><input type="checkbox" data-multi-all {% if not ex.chosen %}checked{% endif %}><span>Wszystkie ćwiczenia</span></label>
+          <div class="multi-select-options">
+            {% for key, name in ex.options %}
+            <label class="multi-option"><input type="checkbox" name="exercise" value="{{ key }}" {% if key in ex.chosen %}checked{% endif %}><span>{{ name }}</span></label>
+            {% endfor %}
+          </div>
+          <p class="multi-select-empty muted small" data-multi-empty hidden>Nie ma ćwiczenia o takiej nazwie.</p>
         </div>
       </details>
     </div>
@@ -117,6 +122,8 @@
 <p class="empty">Brak zgłoszonych treningów. Pojawią się tu, gdy {{ trainee.name }} napisze np. „yanek trening A zrobiony”.</p>
 {% else %}
 
+{# Everything above the tabs: folded away by the tabs' Zwiń (app.js; remembered in the browser). #}
+<div class="calendar-top" id="calendar-top">
 <div class="tiles">
   <div class="tile">
     <div class="tile-label">Ostatni trening</div>
@@ -185,11 +192,16 @@
   </ul>
   {% endif %}
 </section>
+</div>
 
-<nav class="tabs" aria-label="Widok pod kalendarzem">
+<div class="tabs" role="navigation" aria-label="Widok pod kalendarzem">
   <a class="tab{{ ' active' if view == 'trainings' }}" href="?month={{ month_param(month) }}"{% if view == 'trainings' %} aria-current="page"{% endif %}>Treningi</a>
   <a class="tab{{ ' active' if view == 'exercises' }}" href="?month={{ month_param(month) }}&amp;view=exercises"{% if view == 'exercises' %} aria-current="page"{% endif %}>Ćwiczenia</a>
-</nav>
+  {# Shown only with JavaScript (app.js). #}
+  <button type="button" class="fold-toggle" data-calendar-toggle aria-controls="calendar-top" aria-expanded="true" hidden>
+    <span class="when-open">📅 ▴</span><span class="when-folded">📅 ▾</span>
+  </button>
+</div>
 
 {% if view == "trainings" %}
 <section class="card">

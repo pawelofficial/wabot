@@ -137,6 +137,14 @@ def trainings(
     )
 
 
+# Polish alphabetical order (ą after a, ł after l, ś after s, ...): Python's own puts them after z.
+POLISH = "aąbcćdeęfghijklłmnńoópqrsśtuvwxyzźż"
+
+
+def polish_key(text: str) -> list[int]:
+    return [POLISH.index(c) if c in POLISH else 100 + ord(c) for c in text.casefold()]
+
+
 def date_asked(value: str | None) -> dt.date | None:
     try:
         return dt.date.fromisoformat(value) if value else None
@@ -148,7 +156,8 @@ def date_asked(value: str | None) -> dt.date | None:
 class ExerciseView:
     """What the Ćwiczenia tab shows."""
 
-    options: list[tuple[str, str]]  # (key, name): every exercise done, then the plan's others
+    # (key, name): every exercise done and the current plan's others, alphabetically.
+    options: list[tuple[str, str]]
     chosen: list[str]  # option keys, in the options' order; none: the summary of all
     first: dt.date | None  # the range asked (None: from the first training)
     last: dt.date | None
@@ -173,6 +182,7 @@ def exercise_view(session, trainee, plan, asked: list[str], from_, to) -> Exerci
             if planned.id not in known:
                 known.add(planned.id)
                 options.append((planned.id, f"{exercises.BY_ID[planned.id].name} (jeszcze nie)"))
+    options.sort(key=lambda option: polish_key(option[1]))
     first, last = date_asked(from_), date_asked(to)
     done = [
         d

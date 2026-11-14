@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from wabot import assistant, entries, exercises, llm_output, plan_history, plans
 from wabot.config import Settings, get_settings
-from wabot.dashboard import auth, plan_editor, queries, routes
+from wabot.dashboard import auth, plan_editor, queries, routes, training_pages
 from wabot.db import SessionLocal
 from wabot.main import app
 from wabot.models import (
@@ -1092,7 +1092,7 @@ def test_the_trainings_page_moves_between_months(client, settings, people):
 def test_the_trainings_page_without_trainings(client, settings, people):
     sign_in(client, people["Trener Marek"])
     page = client.get(f"/dashboard/trainees/{people['Kasia'].id}/trainings").text
-    assert "Brak zgłoszonych treningów" in page and "calendar" not in page
+    assert "Brak zgłoszonych treningów" in page and '<table class="calendar">' not in page
 
 
 def test_the_sites_address_opens_the_dashboard(client):
@@ -1247,8 +1247,10 @@ def test_several_exercises_at_once(client, settings, people):
         client, kasia, "&exercise=leg_curl&exercise=back_squat&exercise=calf_raise"
     )
     ex_view = response.context["ex"]
-    # In the options' order (the most frequent first), whatever the address's order.
-    assert ex_view.chosen == ["back_squat", "leg_curl", "calf_raise"]
+    # In the options' order (alphabetical), whatever the address's order.
+    assert ex_view.chosen == [
+        k for k, _ in ex_view.options if k in {"leg_curl", "back_squat", "calf_raise"}
+    ]
     assert [(d.date.day, d.exercise.exercise_id) for d in ex_view.rows] == [
         (13, "back_squat"),
         (6, "back_squat"),
@@ -1259,7 +1261,7 @@ def test_several_exercises_at_once(client, settings, people):
     assert "<th>Ćwiczenie</th><th>Trening</th>" in page  # several: which one each row is
     assert f"Bez zgłoszeń w tym okresie: {NAME['calf_raise']}" in page
     assert page.count('type="checkbox" name="exercise"') == len(ex_view.options)
-    assert page.count("checked>") == 3
+    assert page.count("checked>") == 3  # "Wszystkie ćwiczenia" isn't
 
 
 def test_the_plans_numbers_only_where_the_trainee_gave_none(client, settings, people):
@@ -1290,3 +1292,69 @@ def test_the_plans_numbers_only_where_the_trainee_gave_none(client, settings, pe
 )
 def test_a_plans_weight_as_a_number(text, kg):
     assert queries.plan_kg(text) == kg
+
+
+def test_the_exercise_choice_is_alphabetical_with_wszystkie_first(client, settings, people):
+    kasia = people["Kasia"]
+    give_plan(kasia)
+    tuesday = [squat(100), ex("leg_curl", "Uginanie", sets=3, reps="12", weight_kg=40)]
+    add_training(kasia, october(6), "yanek dół", "Wtorek – dół 1", tuesday)
+    add_training(kasia, october(7), "yanek bieg", exercises=[ex(None, "Bieg 5 km", in_plan=False)])
+    sign_in(client, people["Trener Marek"])
+    response = exercises_page(client, kasia)
+    names = [name for _, name in response.context["ex"].options]
+    # Polish order: Ś after S, Ł after L ... (Python's own order would put them after Z).
+    assert names == sorted(names, key=training_pages.polish_key)
+    assert names[0] == "Bieg 5 km"
+    page = response.text
+    assert page.index("Wszystkie ćwiczenia</span>") < page.index("Bieg 5 km</span>")
+    assert "data-multi-all checked" in page  # nothing chosen: all
+
+
+def test_polish_alphabetical_order():
+    words = ["Ściąganie", "Zakroki", "Spacer", "Łydki", "Martwy", "Lunges", "ćwiczenie", "Cable"]
+    assert sorted(words, key=training_pages.polish_key) == [
+        "Cable",
+        "ćwiczenie",
+        "Lunges",
+        "Łydki",
+        "Martwy",
+        "Spacer",
+        "Ściąganie",
+        "Zakroki",
+    ]
+
+
+def test_the_calendar_folds_away(client, settings, people):
+    kasia = people["Kasia"]
+    give_plan(kasia)
+    add_training(kasia, october(6), "yanek dół", "Wtorek – dół 1", [squat(100)])
+    sign_in(client, people["Trener Marek"])
+    page = exercises_page(client, kasia).text
+    # Zwiń (shown by app.js) sits in the tabs row and folds everything above it: the tiles and
+    # the calendar with its month bar. A folded page is remembered: <html> gets the class
+    # before the page draws.
+    top = page.split('<div class="calendar-top" id="calendar-top">')[1].split('<div class="tabs"')[
+        0
+    ]
+    assert (
+        '<div class="tiles">' in top
+        and 'class="month-bar"' in top
+        and '<table class="calendar">' in top
+    )
+    tabs = page.split('<div class="tabs"')[1].split("</div>")[0]
+    assert 'data-calendar-toggle aria-controls="calendar-top" aria-expanded="true" hidden' in tabs
+    assert "📅 ▴" in tabs and "📅 ▾" in tabs and "Zwiń kalendarz" not in page
+    assert 'localStorage.getItem("calendar") === "folded"' in page
+    css = client.get("/dashboard/static/app.css").text
+    assert ".calendar-folded .calendar-top { display: none; }" in css
+
+
+def test_scripts_and_styles_are_checked_again_on_every_page(client):
+    # A browser that kept an old app.js after an update had a button that did nothing.
+    response = client.get("/dashboard/static/app.js")
+    assert response.headers["cache-control"] == "no-cache"
+    again = client.get(
+        "/dashboard/static/app.js", headers={"If-None-Match": response.headers["etag"]}
+    )
+    assert again.status_code == 304  # cheap when unchanged

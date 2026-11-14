@@ -1,3 +1,7 @@
+/* `hidden` always hides, whatever an element's own display (.button is inline-flex): a button the
+   script shows only once it works stays hidden until then. */
+[hidden] { display: none !important; }
+
 :root {
   --bg: #f6f7f9;
   --surface: #ffffff;
@@ -334,7 +338,19 @@ a.chip:hover { border-color: var(--accent); }
     --outside: #a597f5; --outside-soft: #29254a;
   }
 }
-.month-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.month-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+/* Treningi: everything above the tabs (the tiles and the calendar) folds away with the tabs' Zwiń
+   (app.js), so the tab below gets the whole page; the class is set on <html> before the page
+   draws (base.html), so a folded page doesn't flash open. */
+.calendar-folded .calendar-top { display: none; }
+.fold-toggle {
+  margin-left: auto; align-self: center; padding: 5px 10px; font: inherit; font-size: 13px; color: var(--muted);
+  background: none; border: 1px solid var(--border); border-radius: 7px; cursor: pointer; white-space: nowrap;
+}
+.fold-toggle:hover { color: var(--text); background: var(--surface); }
+.fold-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.fold-toggle .when-folded, .calendar-folded .fold-toggle .when-open { display: none; }
+.calendar-folded .fold-toggle .when-folded { display: inline; }
 .month-name { min-width: 150px; text-align: center; }
 .month-name::first-letter { text-transform: uppercase; }
 .button.disabled { opacity: 0.4; cursor: default; }
@@ -391,20 +407,52 @@ a.cal-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px
 .workout-table .dose, .workout-table th:last-child { width: 38%; }
 .workout-message { margin: 8px 0 0; }
 
-/* Treningi's tabs under the calendar: Treningi / Ćwiczenia (links, no script). */
+/* Treningi's tabs under the calendar: Treningi / Ćwiczenia (links, no script). A div, not a
+   <nav>: the sidebar's nav rules would make them stacked menu entries. */
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 8px 0 12px; }
 .tab { padding: 8px 14px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 600; }
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .exercise-filter { margin-bottom: 8px; }
 .exercise-filter .field { min-width: 150px; }
-/* The exercise choice: checkboxes in a fold-out (several at once, no script). */
+/* The exercise choice: checkboxes in a fold-out, several at once; app.js adds the search and
+   "Wszystkie ćwiczenia" (without it the checkboxes still work). Not a .field: its input rules
+   would stretch the checkboxes. */
+.filter-field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
 .multi-select { position: relative; }
-.multi-select summary { cursor: pointer; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); min-width: 220px; max-width: 360px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
-.multi-select[open] summary { border-color: var(--accent); }
-.multi-select-options { position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; display: grid; gap: 2px; max-height: 320px; overflow-y: auto; min-width: 280px; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgb(0 0 0 / 12%); }
-.multi-select-options label { display: flex; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 4px; color: var(--text); font-size: 14px; cursor: pointer; }
-.multi-select-options label:hover { background: var(--bg); }
+.multi-select summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  min-width: 240px; max-width: 360px; padding: 7px 10px; font-size: 14px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+}
+.multi-select summary::-webkit-details-marker { display: none; }
+.multi-select summary::after { content: "▾"; margin-left: auto; color: var(--muted); }
+.multi-select summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.multi-select[open] summary { outline: 2px solid var(--accent); outline-offset: -1px; }
+.multi-select-panel {
+  position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; width: max(100%, 300px);
+  padding: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+}
+.multi-select-search {
+  width: 100%; margin-bottom: 4px; padding: 7px 9px; font: inherit; font-size: 14px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+}
+.multi-select-search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.multi-select-options { max-height: 300px; overflow-y: auto; }
+.multi-option {
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 5px;
+  font-size: 14px; line-height: 1.3; color: var(--text); cursor: pointer;
+}
+.multi-option:hover { background: var(--bg); }
+.multi-option[hidden] { display: none; }
+.multi-option input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.multi-option-all { font-weight: 600; border-bottom: 1px solid var(--border); border-radius: 5px 5px 0 0; margin-bottom: 2px; }
+.multi-select-empty { margin: 6px 8px; }
+@media (max-width: 760px) {
+  .multi-select summary { min-width: 0; max-width: none; }
+  .multi-select-panel { position: static; width: 100%; margin-top: 4px; box-shadow: none; }
+}
 .exercise-stats { margin: 4px 0 10px; padding-left: 18px; }
 @media (max-width: 760px) { .multi-select-options { position: static; min-width: 0; } .multi-select summary { max-width: none; } }
 

@@ -6,7 +6,7 @@
   <title>{% block title %}{% endblock %} – Yanek</title>
   <link rel="stylesheet" href="/dashboard/static/app.css">
   {# Before the page draws, so a folded sidebar doesn't flash open. #}
-  <script>try { if (localStorage.getItem("sidebar") === "folded") document.documentElement.classList.add("folded"); } catch (e) {}</script>
+  <script>try { if (localStorage.getItem("sidebar") === "folded") document.documentElement.classList.add("folded"); if (localStorage.getItem("calendar") === "folded") document.documentElement.classList.add("calendar-folded"); } catch (e) {}</script>
 </head>
 <body>
   <aside class="sidebar">

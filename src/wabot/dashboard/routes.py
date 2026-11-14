@@ -123,6 +123,17 @@ TRAINEE_SECTIONS = [
 ]
 
 
+class RevalidatedStaticFiles(StaticFiles):
+    """The dashboard's CSS and scripts, which the browser may keep but must check again on every
+    page (a 304 when unchanged): without it, a browser kept an old app.js after an update and a
+    new button did nothing."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def install(app: FastAPI) -> None:
     # They use render() from here.
     from wabot.dashboard import plan_pages, trainee_pages, trainer_pages, training_pages
@@ -133,7 +144,7 @@ def install(app: FastAPI) -> None:
     app.include_router(router)
     app.include_router(plan_pages.router)
     app.include_router(training_pages.router)
-    app.mount("/dashboard/static", StaticFiles(directory=HERE / "static"), name="static")
+    app.mount("/dashboard/static", RevalidatedStaticFiles(directory=HERE / "static"), name="static")
     # A page that needs a signed-in trainer, without one: go to the login page.
     app.add_exception_handler(
         auth.NotSignedIn, lambda request, exc: RedirectResponse("/dashboard/login", 303)
