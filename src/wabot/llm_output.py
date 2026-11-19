@@ -80,9 +80,22 @@ class InvalidOutputError(Exception):
         self.errors = errors
 
 
-def json_schema() -> dict:
-    """The schema for OpenAI's strict structured outputs."""
-    return LlmOutput.model_json_schema()
+def json_schema(exercise_ids: list[str] | None = None) -> dict:
+    """The schema for OpenAI's strict structured outputs. exercise_ids: the IDs exercise_id and
+    replaces may be (the trainee's trainer's: exercises.ids_of_trainer()); default the built-in
+    catalog."""
+    ids = list(exercise_ids if exercise_ids is not None else exercises.IDS)
+
+    def fill(node):
+        if isinstance(node, dict):
+            if node.get("enum") == [exercises.SCHEMA_PLACEHOLDER]:
+                return {**node, "enum": ids}
+            return {k: fill(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [fill(v) for v in node]
+        return node
+
+    return fill(LlmOutput.model_json_schema())
 
 
 def _foreign_letters(text: str, allowed: str = "") -> str:
@@ -149,11 +162,15 @@ def _check_against_plan(errors: list[str], training: Training, plan: TrainingPla
 
 
 def validate_output(
-    raw: str, today: dt.date, plan: TrainingPlan | None, allowed_letters: str = ""
+    raw: str,
+    today: dt.date,
+    plan: TrainingPlan | None,
+    allowed_letters: str = "",
+    trainer_id: int | None = None,
 ) -> LlmOutput:
     """Parse the model's JSON and check it; raises InvalidOutputError listing every problem.
     allowed_letters: text whose letters the reply may use even if they aren't Latin (the
-    trainee's name and messages)."""
+    trainee's name and messages). trainer_id: whose own exercises names are matched to."""
     try:
         output = LlmOutput.model_validate_json(raw)
     except ValidationError as e:
@@ -212,7 +229,7 @@ def validate_output(
     output.reply = _to_whatsapp_format(output.reply)
     if output.training is not None:
         _fill_in_missed(output.training, plan)
-        _match_to_catalog(output.training, plan)
+        _match_to_catalog(output.training, plan, trainer_id)
     return output
 
 
@@ -231,11 +248,13 @@ def _fill_in_missed(training: Training, plan: TrainingPlan | None) -> None:
         training.status = "partial" if training.missed_exercises else "done"
 
 
-def _match_to_catalog(training: Training, plan: TrainingPlan | None) -> None:
+def _match_to_catalog(
+    training: Training, plan: TrainingPlan | None, trainer_id: int | None = None
+) -> None:
     """Catalog IDs for exercises outside the plan. The model sees only the plan's exercises, so
     the code matches the others by name and alias ("pompki" → push_up); an ID the model picked
     from the schema's list is the fallback, and null stays null outside the catalog."""
     from_plan = plan.allowed_ids() if plan else set()
     for ex in training.exercises:
         if ex.exercise_id not in from_plan:
-            ex.exercise_id = exercises.lookup(ex.name) or ex.exercise_id
+            ex.exercise_id = exercises.lookup(ex.name, trainer_id) or ex.exercise_id

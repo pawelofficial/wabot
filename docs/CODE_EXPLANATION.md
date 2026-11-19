@@ -17,10 +17,12 @@ A walk through what happens at runtime: which function calls which, in what orde
 | `src/wabot/llm_output.py` | The shape of the model's answer (pydantic models → JSON schema) and `validate_output()` |
 | `src/wabot/entries.py` | Saving the extracted weight and training into the db (a new row per report; `DAILY_UPDATES_ONLY` updates the day's row instead) |
 | `src/wabot/prompts.yaml` | The Polish prompt texts |
-| `src/wabot/exercises.yaml` / `exercises.py` | The exercise catalog: fixed IDs, names, aliases; `lookup()` finds an ID by name |
+| `src/wabot/exercises.yaml` / `exercises.py` | The exercise catalog: fixed IDs, names, aliases; plus the trainers' own exercises (`set_custom()`); `lookup()` finds an ID by name |
+| `src/wabot/custom_exercises.py` | Exercises trainers add (table `custom_exercises`): `refresh()` loads them into the catalog's registry, `check()` / `add()` for the dashboard (`dashboard/exercise_pages.py`, Baza ćwiczeń) |
 | `src/wabot/plans.py` | Training plans: days of catalog exercises with the trainer's replacements; loading, checking, the text the LLM sees |
 | `src/wabot/models.py` | Database tables (see the end of this file) |
 | `src/wabot/db.py` | Database engine and sessions |
+| `src/wabot/db_admin.py` | `/admin/db`: changing the running bot's database by hand (one SQL statement per request, or a copy of the file), only with `X-Admin-Key: DB_ADMIN_KEY`; `scripts/db_admin.py` is the client |
 | `src/wabot/config.py` | `Settings`: every value from `.env` |
 | `src/wabot/logs.py` | Logging: the level (`LOG_LEVEL`), the console and a rotating file (`LOG_FILE`, 5 MB × 4) that also gets uvicorn's request lines; libraries that would print the Telegram token stay at WARNING |
 | `src/wabot/dashboard/routes.py` | The trainers' dashboard pages under `/dashboard` (Flow 6), `render()` and the Polish formats (`pl_date`, `pl_month`, `pl_dose`, ...); `install(app)` adds them and the routers of `plan_pages.py` and `training_pages.py` to the app |
@@ -47,7 +49,7 @@ Some files do work the moment they're imported, once per process:
 
 - `config.py`: nothing yet; `get_settings()` reads `.env` when it's first called and caches the result.
 - `db.py`: creates the SQLAlchemy `engine` from `DATABASE_URL` (default `sqlite:///wabot.db`) and the `SessionLocal` session factory. For SQLite it turns on WAL, a 5 s busy timeout and foreign keys.
-- `exercises.py`: reads `exercises.yaml` into `CATALOG` (a list of `CatalogExercise`), `IDS`, `BY_ID` and a name/alias → ID table for `lookup()`. Fails on duplicate IDs. `ExerciseId = Literal[IDS]` fixes the allowed exercise IDs at this point, for plans and for the LLM's output.
+- `exercises.py`: reads `exercises.yaml` into `CATALOG` (a list of `CatalogExercise`), `IDS`, `BY_ID` and a name/alias → ID table for `lookup()`. Fails on duplicate IDs. `ExerciseId` accepts any ID in `BY_ID`, for plans and for the LLM's output. Trainers' own exercises (table `custom_exercises`) join `BY_ID` through `custom_exercises.refresh()` → `exercises.set_custom()`, which `main.load_custom_exercises()` (middleware) runs before every request and `reply()` before reading the plan: the dashboard (another process locally) may have added one. The schema sent to OpenAI lists the trainee's trainer's IDs (`llm_output.json_schema(exercises.ids_of_trainer(...))`), and a reported exercise outside the plan is matched by name to the built-in ones and that trainer's own.
 - `assistant.py`: reads `prompts.yaml` into `PROMPTS`.
 - `telegram.py`: turns httpx's INFO logging off (each line has the request URL, which for Telegram has the bot token).
 - `main.py`: sets up logging (`logs.setup()`: `LOG_LEVEL`, console + `LOG_FILE`) and creates the FastAPI `app`. When uvicorn starts it, it logs a warning if the active channel's settings are missing (`Settings.missing_for_channel()`).
@@ -189,6 +191,16 @@ DB_BUCKET=yanek-bot-db  main.keep_database_in_bucket() (middleware), after every
                           to gs://<bucket>/wabot.db; a failure is logged and retried next time
 deploy/start.sh at start: deploy/fetch_db.py (gs://<bucket>/wabot.db, else seed/wabot.db, else
                           nothing) → alembic upgrade head → uvicorn
+```
+
+Changing that database by hand (`DB_ADMIN_KEY`):
+
+```
+scripts/db_admin.py "UPDATE ..."  → POST /admin/db/sql, header X-Admin-Key
+  db_admin.require_key()          DB_ADMIN_KEY unset or < 24 chars → 404; wrong key → 401
+  db_admin.run_sql()              one statement, engine.begin() → committed; rows or rowcount
+  keep_database_in_bucket()       the same middleware: it changed → uploaded to the bucket
+scripts/db_admin.py --download x.db → GET /admin/db/file: db_sync.snapshot() of the file
 ```
 
 ## Flow 2: the LLM call
@@ -511,7 +523,7 @@ To look at the data, open `wabot.db` in any SQLite browser (DB Browser for SQLit
 |---|---|
 | change what Yanek says or how it extracts | `src/wabot/prompts.yaml` (`system`) |
 | add a field to the extracted JSON | the pydantic model in `llm_output.py`, the rules in `prompts.yaml`, a check in `validate_output()` if needed, a column in `models.py` + a migration, tests in `tests/test_llm_output.py` and `tests/test_entries.py` |
-| add an exercise | a new entry in `exercises.yaml` (never rename an existing ID); plans can use it right away |
+| add an exercise | for one trainer: Baza ćwiczeń in the dashboard (or the plan editor's "Nie ma ćwiczenia na liście?"); for everyone: a new entry in `exercises.yaml` (never rename an existing ID); plans can use it right away |
 | teach the bot a nickname ("siady") | add it to the exercise's `aliases` in `exercises.yaml` |
 | change a trainee's training plan | the dashboard: Plan treningowy → Edytuj plan, or Przypisz a library plan; or edit a copy of `plans/example.yaml`, then `uv run python scripts/add_trainee.py --plan path/to/plan.yaml` |
 | change a trainee's plan from code | `plan_history.assign()` (or `remove()`); don't set `trainees.plan_version_id` yourself |

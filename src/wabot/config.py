@@ -88,6 +88,9 @@ class Settings(DatabaseSettings):
     # The dashboard's admins: Google emails, comma-separated. A trainer signed in with one of
     # them also gets Trenerzy (adding trainers, dashboard/trainer_pages.py).
     admin_emails: str = ""
+    # The key for changing the database over HTTP (/admin/db, db_admin.py; scripts/db_admin.py):
+    # requests must send it as X-Admin-Key. Empty or shorter than 24 characters: no /admin/db.
+    db_admin_key: str = ""
 
     @field_validator("log_level", mode="before")
     @classmethod

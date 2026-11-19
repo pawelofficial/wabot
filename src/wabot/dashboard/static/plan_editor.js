@@ -18,8 +18,10 @@
   notes.addEventListener("input", fit);
   fit();
 
-  form.addEventListener("input", () => { dirty = true; });
-  form.addEventListener("change", () => { dirty = true; });
+  // Typing a new exercise for the base (below) isn't a change to the plan.
+  const inPlan = (event) => !event.target.closest("[data-new-exercise]");
+  form.addEventListener("input", (event) => { if (inPlan(event)) dirty = true; });
+  form.addEventListener("change", (event) => { if (inPlan(event)) dirty = true; });
   window.addEventListener("beforeunload", (event) => {
     if (dirty) event.preventDefault();
   });
@@ -36,7 +38,7 @@
 
   form.addEventListener("click", (event) => {
     const button = event.target.closest("button");
-    if (!button || button.type === "submit") return;
+    if (!button || button.type === "submit" || button.matches("[data-add-new-exercise]")) return;
 
     if (button.matches("[data-add-day]")) {
       const day = clone("day");
@@ -85,6 +87,59 @@
     }
     select.value = "";
   });
+
+  // "Nie ma ćwiczenia na liście?": the new exercise goes to the trainer's base (POST
+  // /dashboard/exercises, as JSON) and into every exercise dropdown, the templates' included,
+  // without reloading the page (the plan isn't saved yet).
+  const box = form.querySelector("[data-new-exercise]");
+  if (box) {
+    const field = (name) => box.querySelector(`[data-new=${name}]`);
+    const status = box.querySelector("[data-new-exercise-status]");
+    const say = (text, isError) => {
+      status.textContent = text;
+      status.classList.toggle("error", isError);
+      status.hidden = false;
+    };
+    const addOption = (root, exercise) => {
+      root.querySelectorAll("select[data-field=id], select[data-add-replacement]").forEach((select) => {
+        let group = [...select.querySelectorAll("optgroup")].find((g) => g.label === exercise.group);
+        if (!group) {
+          group = document.createElement("optgroup");
+          group.label = exercise.group;
+          select.appendChild(group);
+        }
+        group.appendChild(new Option(exercise.name, exercise.id));
+      });
+    };
+    const add = async () => {
+      const body = new FormData();
+      ["name", "group", "aliases"].forEach((name) => body.append(name, field(name).value || ""));
+      let response;
+      try {
+        response = await fetch("/dashboard/exercises", { method: "POST", body, headers: { Accept: "application/json" } });
+      } catch {
+        say("Nie udało się połączyć z serwerem. Spróbuj jeszcze raz.", true);
+        return;
+      }
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        say(Object.values(result.errors || {}).join(" ") || "Nie udało się dodać ćwiczenia.", true);
+        return;
+      }
+      addOption(form, result);
+      form.querySelectorAll("template").forEach((template) => addOption(template.content, result));
+      say(`Dodano „${result.name}” (${result.group}). Wybierz je z listy w ćwiczeniu planu.`, false);
+      ["name", "aliases"].forEach((name) => { field(name).value = ""; });
+    };
+    box.querySelector("[data-add-new-exercise]").addEventListener("click", add);
+    // Enter in these fields adds the exercise instead of saving the plan.
+    box.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.target.matches("input")) {
+        event.preventDefault();
+        add();
+      }
+    });
+  }
 
   form.addEventListener("submit", () => {
     const value = (root, field) => root.querySelector(`[data-field=${field}]`).value;

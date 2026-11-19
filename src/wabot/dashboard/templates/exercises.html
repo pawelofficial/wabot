@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Baza ćwiczeń{% endblock %}
+{% block heading %}Baza ćwiczeń{% endblock %}
+{% macro error(name) %}{% if form.errors[name] %}<span class="error small" id="{{ name }}-error">{{ form.errors[name] }}</span>{% endif %}{% endmacro %}
+{% block content %}
+{% if added %}
+<div class="notice" role="status">
+  <p><strong>Dodano: {{ added.name }}.</strong> Możesz je teraz wybrać w edytorze planu; Yanek rozpozna je w zgłoszeniach po nazwie{% if added.aliases %} i po: {{ added.aliases|join(", ") }}{% endif %}.</p>
+</div>
+{% endif %}
+
+<section class="card">
+  <h2 class="card-title">Dodaj ćwiczenie</h2>
+  <p class="card-subtitle">Gdy w bazie nie ma ćwiczenia, którego potrzebujesz w planie. Zobaczysz je tylko Ty, w swoich planach.</p>
+  {% if form.errors %}<div class="error-box" role="alert">Popraw zaznaczone pola.</div>{% endif %}
+  <form method="post" action="/dashboard/exercises" class="trainee-form">
+    <label class="field"><span>Nazwa</span>
+      <input name="name" value="{{ form.name }}" maxlength="100" required autocomplete="off" placeholder="np. Wznosy hantli bokiem w opadzie"
+             {% if form.errors.name %}aria-invalid="true" aria-describedby="name-error"{% endif %}>
+      {{ error("name") }}
+    </label>
+    <label class="field"><span>Partia mięśni</span>
+      <select name="group" required {% if form.errors.group %}aria-invalid="true" aria-describedby="group-error"{% endif %}>
+        <option value="" {% if not form.group %}selected{% endif %} disabled>Wybierz…</option>
+        {% for g in groups %}<option value="{{ g }}" {% if g == form.group %}selected{% endif %}>{{ g }}</option>{% endfor %}
+      </select>
+      {{ error("group") }}
+    </label>
+    <label class="field"><span>Inne nazwy (opcjonalnie, po przecinku)</span>
+      <input name="aliases" value="{{ form.aliases }}" autocomplete="off" placeholder="np. odwrotne rozpiętki, reverse fly"
+             {% if form.errors.aliases %}aria-invalid="true" aria-describedby="aliases-error"{% endif %}>
+      {{ error("aliases") }}
+      <span class="muted small">Tak podopieczni mogą nazywać to ćwiczenie; Yanek rozpozna je po każdej z nich.</span>
+    </label>
+    <div><button type="submit" class="button primary">Dodaj ćwiczenie</button></div>
+  </form>
+</section>
+
+<section class="card">
+  <h2 class="card-title">Twoje ćwiczenia</h2>
+  {% if own %}
+  <div class="table-scroll">
+    <table class="table">
+      <thead><tr><th>Ćwiczenie</th><th>Partia</th><th>Inne nazwy</th></tr></thead>
+      <tbody>
+        {% for e in own %}
+        <tr><td>{{ e.name }}</td><td>{{ e.group }}</td><td class="small">{{ e.aliases|join(", ") or "—" }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">Nie dodałeś jeszcze własnych ćwiczeń.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2 class="card-title">Wbudowane ćwiczenia</h2>
+  <p class="card-subtitle">Są w bazie dla wszystkich trenerów. Sprawdź tu, zanim dodasz nowe.</p>
+  {% for group, items in built_in.items() %}
+  <details class="exercise-group">
+    <summary><strong>{{ group }}</strong> <span class="muted small">({{ items|length }})</span></summary>
+    <ul>
+      {% for e in items %}<li>{{ e.name }}{% if e.aliases %} <span class="muted small">– też: {{ e.aliases|join(", ") }}</span>{% endif %}</li>{% endfor %}
+    </ul>
+  </details>
+  {% endfor %}
+</section>
+{% endblock %}

@@ -472,3 +472,17 @@ a.cal-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px
   .cal-day { min-height: 60px; }
   .mark { min-width: 26px; padding: 1px 2px; }
 }
+
+/* Baza ćwiczeń: the built-in exercises, one fold-out per muscle group. */
+.exercise-group { border-top: 1px solid var(--border); padding: 8px 0; }
+.exercise-group summary { cursor: pointer; }
+.exercise-group ul { margin: 6px 0 2px; padding-left: 20px; font-size: 14px; }
+.exercise-group li { margin: 2px 0; }
+
+/* The plan editor: adding an exercise to the trainer's base without leaving the editor. */
+.new-exercise { margin-top: 16px; }
+.new-exercise summary { cursor: pointer; color: var(--accent); }
+.new-exercise-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-top: 10px; }
+.new-exercise-fields .field { min-width: 200px; }
+.new-exercise [data-new-exercise-status] { margin: 8px 0 0; }
+

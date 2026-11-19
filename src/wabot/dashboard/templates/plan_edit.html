@@ -91,6 +91,24 @@
   </div>
   <button type="button" class="button" data-add-day>+ Dodaj dzień</button>
 
+  {# Adding an exercise to the trainer's base without leaving the editor (exercise_pages.py);
+     plan_editor.js adds it to every dropdown. Fields without names: the plan form doesn't send them. #}
+  <details class="card new-exercise" data-new-exercise>
+    <summary>Nie ma ćwiczenia na liście? Dodaj je do bazy</summary>
+    <div class="new-exercise-fields">
+      <label class="field grow"><span>Nazwa</span><input data-new="name" maxlength="100" autocomplete="off" placeholder="np. Wznosy hantli bokiem w opadzie"></label>
+      <label class="field"><span>Partia mięśni</span>
+        <select data-new="group">
+          <option value="" selected disabled>Wybierz…</option>
+          {% for g in muscle_groups %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="field grow"><span>Inne nazwy (po przecinku)</span><input data-new="aliases" autocomplete="off" placeholder="np. odwrotne rozpiętki"></label>
+      <button type="button" class="button" data-add-new-exercise>Dodaj do bazy</button>
+    </div>
+    <p class="small" data-new-exercise-status role="status" hidden></p>
+  </details>
+
   <div class="form-actions">
     <button type="submit" class="button primary">Zapisz plan</button>
     <a class="button" href="{{ cancel_url }}">Anuluj</a>

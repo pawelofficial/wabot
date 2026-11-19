@@ -291,3 +291,19 @@ class TraineePlan(Base):
     )
     name: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[dt.datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class CustomExercise(Base):
+    """An exercise a trainer added (Baza ćwiczeń, custom_exercises.py) because the built-in
+    catalog (exercises.yaml) doesn't have it. Only that trainer sees it in the plan editor; its
+    ID (exercise_id, "custom_wznosy_hantli") is permanent once a plan or a training uses it."""
+
+    __tablename__ = "custom_exercises"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trainer_id: Mapped[int] = mapped_column(ForeignKey("trainers.id"), index=True)
+    exercise_id: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(100))
+    aliases: Mapped[list[str]] = mapped_column(JSON)  # other names the trainee may use
+    group: Mapped[str] = mapped_column(String(40))  # muscle group, one of exercises.GROUPS
+    created_at: Mapped[dt.datetime] = mapped_column(UTCDateTime, default=utcnow)

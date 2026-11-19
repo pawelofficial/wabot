@@ -29,10 +29,11 @@ class Group:
     options: list[tuple[str, str]]  # (ID, Polish name)
 
 
-def exercise_groups() -> list[Group]:
-    """The catalog for the exercise dropdowns, by muscle group, in catalog order."""
+def exercise_groups(trainer_id: int | None = None) -> list[Group]:
+    """The exercise dropdowns: the built-in catalog by muscle group, in catalog order, with the
+    trainer's own exercises at the end of their group."""
     groups: dict[str, Group] = {}
-    for e in exercises.CATALOG:
+    for e in exercises.of_trainer(trainer_id):
         groups.setdefault(e.group, Group(e.group, [])).options.append((e.id, e.name))
     return list(groups.values())
 
@@ -48,8 +49,9 @@ def form_data(plan: TrainingPlan | None) -> dict:
     return data
 
 
-def parse(text: str) -> tuple[dict, TrainingPlan | None, list[str]]:
-    """The submitted plan JSON: (the form data to show again, the plan or None, the errors)."""
+def parse(text: str, trainer_id: int | None = None) -> tuple[dict, TrainingPlan | None, list[str]]:
+    """The submitted plan JSON: (the form data to show again, the plan or None, the errors).
+    Its exercises must be the built-in ones or the trainer's own."""
     try:
         raw = json.loads(text)
     except ValueError:
@@ -58,9 +60,15 @@ def parse(text: str) -> tuple[dict, TrainingPlan | None, list[str]]:
         return form_data(None), None, ["Nie udało się odczytać planu. Odśwież stronę."]
     data = _clean(raw)
     try:
-        return data, TrainingPlan.model_validate(_without_empty(data)), []
+        plan = TrainingPlan.model_validate(_without_empty(data))
     except ValidationError as e:
         return data, None, _messages(e, data)
+    allowed = set(exercises.ids_of_trainer(trainer_id))
+    used = {i for day in plan.days for e in day.exercises for i in (e.id, *e.replacements)}
+    if used - allowed:
+        # Another trainer's own exercise: only a tampered form gets here.
+        return data, None, ["Plan ma ćwiczenie spoza Twojej bazy ćwiczeń. Odśwież stronę."]
+    return data, plan, []
 
 
 def _text(value) -> str:

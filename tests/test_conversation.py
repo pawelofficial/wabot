@@ -421,7 +421,7 @@ def test_a_reply_to_a_message_the_bot_started_shows_the_model_that_message():
 def test_reply_call_sends_the_marked_history(monkeypatch):
     sent = {}
 
-    def fake_complete(settings, instructions, messages, today, training_plan):
+    def fake_complete(settings, instructions, messages, today, training_plan, trainer_id=None):
         sent["messages"] = messages
         return None
 
@@ -434,7 +434,7 @@ def test_reply_call_sends_the_marked_history(monkeypatch):
 def test_today_is_the_trainees_local_date(monkeypatch):
     sent = {}
 
-    def fake_complete(settings, instructions, messages, today, training_plan):
+    def fake_complete(settings, instructions, messages, today, training_plan, trainer_id=None):
         sent.update(today=today, last=messages[-1]["content"])
 
     monkeypatch.setattr(assistant, "_complete", fake_complete)

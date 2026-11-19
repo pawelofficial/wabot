@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import openai
 import yaml
 
-from wabot import llm_output, plans
+from wabot import exercises, llm_output, plans
 from wabot.config import Settings
 from wabot.llm_output import LlmOutput
 from wabot.models import Message, Trainee
@@ -108,8 +108,10 @@ def _complete(
     messages: list[dict],
     today: date,
     plan: TrainingPlan | None,
+    trainer_id: int | None = None,
 ) -> LlmOutput:
-    """Call the model; today (the trainee's local date) and the plan are for validation."""
+    """Call the model; today (the trainee's local date) and the plan are for validation, the
+    trainer's exercises (built-in and their own) are the IDs the schema allows."""
     if not settings.openai_api_key:
         raise MissingApiKeyError("OPENAI_API_KEY is not set in .env")
 
@@ -130,7 +132,7 @@ def _complete(
                 "format": {
                     "type": "json_schema",
                     "name": "yanek_output",
-                    "schema": llm_output.json_schema(),
+                    "schema": llm_output.json_schema(exercises.ids_of_trainer(trainer_id)),
                     "strict": True,
                 }
             },
@@ -153,7 +155,9 @@ def _complete(
             # Letters from the instructions (the trainee's name) and the chat are allowed in
             # the reply even when they aren't Latin, e.g. a Ukrainian name.
             seen = instructions + "".join(str(m["content"]) for m in messages)
-            return llm_output.validate_output(raw, today, plan, allowed_letters=seen)
+            return llm_output.validate_output(
+                raw, today, plan, allowed_letters=seen, trainer_id=trainer_id
+            )
         except llm_output.InvalidOutputError as e:
             log.warning("Invalid LLM output (attempt %d/%d): %s", attempt, ATTEMPTS, e)
             if attempt == ATTEMPTS:
@@ -192,6 +196,7 @@ def generate_reply(
         ],
         _local(trainee, now).date(),
         plan,
+        trainee.trainer_id,
     )
 
 
@@ -210,5 +215,6 @@ def generate_first_message(
         ],
         _local(trainee, now).date(),
         plan,
+        trainee.trainer_id,
     )
     return output.reply

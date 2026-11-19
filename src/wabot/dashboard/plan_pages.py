@@ -131,7 +131,8 @@ def editor_page(
         "plan" if trainee else "library",
         data=data,
         errors=errors,
-        groups=plan_editor.exercise_groups(),
+        groups=plan_editor.exercise_groups(trainer.id),
+        muscle_groups=exercises.GROUPS,
         catalog=exercises.BY_ID,
         heading=heading,
         cancel_url=cancel_url,
@@ -175,7 +176,7 @@ def save_trainee_plan(
 ):
     """Save the edited plan (the editor's JSON) as a new version. The bot uses it from the
     trainee's next message on; saved check-ins keep the plan day they were saved with."""
-    data, new_plan, errors = plan_editor.parse(plan)
+    data, new_plan, errors = plan_editor.parse(plan, trainer.id)
     if errors:
         return trainee_editor(request, session, trainer, trainee, data, errors, 422)
     version = plan_history.assign(session, trainee, new_plan, "edited")
@@ -291,7 +292,7 @@ def library_editor(request, session, trainer, template, data, name, errors=(), s
 
 def save_library_plan(request, session, trainer, template, plan_json, name):
     name = " ".join(name.split())
-    data, new_plan, errors = plan_editor.parse(plan_json)
+    data, new_plan, errors = plan_editor.parse(plan_json, trainer.id)
     if error := name_error(session, trainer, name, template):
         errors = [error, *errors]
     if errors:

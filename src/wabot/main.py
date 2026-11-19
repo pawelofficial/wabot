@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 from wabot import (
     assistant,
     conversation,
+    custom_exercises,
+    db_admin,
     db_sync,
     entries,
     logs,
@@ -53,6 +55,20 @@ app = FastAPI(title="wabot", lifespan=lifespan)
 
 
 @app.middleware("http")
+async def load_custom_exercises(request: Request, call_next):
+    """The trainers' own exercises into the catalog before every page and webhook: one may have
+    been added since (by the dashboard, another process locally; custom_exercises.py)."""
+    if not request.url.path.startswith("/dashboard/static/"):
+        await asyncio.to_thread(_refresh_custom_exercises)
+    return await call_next(request)
+
+
+def _refresh_custom_exercises() -> None:
+    with SessionLocal() as session:
+        custom_exercises.refresh(session)
+
+
+@app.middleware("http")
 async def keep_database_in_bucket(request: Request, call_next):
     """With DB_BUCKET (Cloud Run): after a request that changed the database, a copy goes to the
     bucket before the response is sent (db_sync.py), while the instance still has CPU."""
@@ -75,6 +91,8 @@ async def after_storing(settings: Settings, background: BackgroundTasks, task, *
 
 # The trainers' dashboard under /dashboard.
 dashboard.install(app)
+# Changing the database by hand, with DB_ADMIN_KEY (db_admin.py).
+app.include_router(db_admin.router)
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -330,6 +348,8 @@ def reply(message_id: int) -> None:
             if reason := conversation.not_answered_because(session, message):
                 log.info("Not answering %s: %s", message.external_id, reason)
                 return
+            # The trainers' own exercises as they are now (the plan may use one).
+            custom_exercises.refresh(session)
             # With the trainee's current plan version: the LLM call and the save use this one.
             turn = conversation.load_turn(session, message, now)
         log.info(

@@ -136,7 +136,13 @@ class RevalidatedStaticFiles(StaticFiles):
 
 def install(app: FastAPI) -> None:
     # They use render() from here.
-    from wabot.dashboard import plan_pages, trainee_pages, trainer_pages, training_pages
+    from wabot.dashboard import (
+        exercise_pages,
+        plan_pages,
+        trainee_pages,
+        trainer_pages,
+        training_pages,
+    )
 
     # Before router: /trainees/new isn't a trainee's ID.
     app.include_router(trainee_pages.router)
@@ -144,6 +150,7 @@ def install(app: FastAPI) -> None:
     app.include_router(router)
     app.include_router(plan_pages.router)
     app.include_router(training_pages.router)
+    app.include_router(exercise_pages.router)
     app.mount("/dashboard/static", RevalidatedStaticFiles(directory=HERE / "static"), name="static")
     # A page that needs a signed-in trainer, without one: go to the login page.
     app.add_exception_handler(

@@ -21,7 +21,7 @@ os.environ.update(
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from wabot import config, telegram  # noqa: E402
+from wabot import config, exercises, telegram  # noqa: E402
 
 # Tests don't read .env: what they run with mustn't depend on the developer's local settings
 # (HISTORY_MODE, DAILY_UPDATES_ONLY, GOOGLE_CLIENT_ID, ...). Only the values above and the code's
@@ -38,6 +38,8 @@ from wabot.models import Base  # noqa: E402
 def fresh_db():
     Base.metadata.create_all(engine)
     yield
+    # The trainers' own exercises live in the catalog's registry too; they go with the database.
+    exercises.set_custom([])
     # trainees and trainee_plans point at each other (the current plan version), so with
     # foreign keys on, SQLite can drop neither while they have rows.
     with engine.connect() as connection:

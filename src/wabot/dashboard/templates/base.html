@@ -47,10 +47,13 @@
       <a href="/dashboard/plans" {% if section == "library" %}class="active" aria-current="page"{% endif %} title="Biblioteka planów">
         <span class="icon">📚</span><span class="label">Biblioteka planów</span>
       </a>
+      <a href="/dashboard/exercises" {% if section == "exercises" %}class="active" aria-current="page"{% endif %} title="Baza ćwiczeń">
+        <span class="icon">💪</span><span class="label">Baza ćwiczeń</span>
+      </a>
       {% if is_admin %}
       <hr>
       <a href="/dashboard/trainers" {% if section == "trainers" %}class="active" aria-current="page"{% endif %} title="Trenerzy">
-        <span class="icon">🧑‍🏫</span><span class="label">Trenerzy</span>
+        <span class="icon">🧑</span><span class="label">Trenerzy</span>
       </a>
       {% endif %}
     </nav>
