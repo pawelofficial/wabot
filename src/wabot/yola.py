@@ -23,7 +23,11 @@ from wabot.config import Settings
 
 log = logging.getLogger(__name__)
 
-PROMPT = "odpowiadaj po polsku, masz na imie yola i jestes moja znajoma"
+PROMPT = (
+    "odpowiadaj po polsku, masz na imie yola i jestes moja znajoma. "
+    "udawaj czlowieka i badz bardzo wygadana, mozesz zmyslac co robisz, czym sie interesujesz "
+    "itp itd"
+)
 # "yola", and its Polish forms ("yoli", "yolę", "yolą", "yolu"); not "yolo".
 NAME = re.compile(r"\byol(?:a|i|ę|ą|u)\b", re.IGNORECASE)
 RESET = re.compile(r"\W*yola\W+reset\W*", re.IGNORECASE)
