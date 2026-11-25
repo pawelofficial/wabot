@@ -91,12 +91,21 @@ class Settings(DatabaseSettings):
     # The key for changing the database over HTTP (/admin/db, db_admin.py; scripts/db_admin.py):
     # requests must send it as X-Admin-Key. Empty or shorter than 24 characters: no /admin/db.
     db_admin_key: str = ""
+    # Yola (yola.py, an experiment): trainee IDs (comma-separated) whose messages mentioning
+    # "yola" go to plain GPT instead of Yanek. Empty: nobody's. YOLA_DELAY: seconds from the
+    # message to Yola's answer (0: as soon as the model answers).
+    yola_trainee_ids: str = ""
+    yola_delay: float = 30
 
     @field_validator("log_level", mode="before")
     @classmethod
     def _any_case(cls, value):
         # LOG_LEVEL=debug works as well as DEBUG.
         return value.upper() if isinstance(value, str) else value
+
+    def yola_allowed(self, trainee_id: int) -> bool:
+        """Whether this trainee can talk to Yola (YOLA_TRAINEE_IDS)."""
+        return str(trainee_id) in {i.strip() for i in self.yola_trainee_ids.split(",")}
 
     def is_admin(self, email: str | None) -> bool:
         """Whether a trainer with this (lowercase) email is an admin (ADMIN_EMAILS)."""

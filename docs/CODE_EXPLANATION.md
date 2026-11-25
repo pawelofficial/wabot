@@ -22,6 +22,7 @@ A walk through what happens at runtime: which function calls which, in what orde
 | `src/wabot/plans.py` | Training plans: days of catalog exercises with the trainer's replacements; loading, checking, the text the LLM sees |
 | `src/wabot/models.py` | Database tables (see the end of this file) |
 | `src/wabot/db.py` | Database engine and sessions |
+| `src/wabot/yola.py` | Yola, an experiment: "yola" in a message from a trainee in `YOLA_TRAINEE_IDS` goes to plain GPT with a one-line prompt, answered after `YOLA_DELAY` seconds; nothing stored (Flow 1b) |
 | `src/wabot/db_admin.py` | `/admin/db`: changing the running bot's database by hand (one SQL statement per request, or a copy of the file), only with `X-Admin-Key: DB_ADMIN_KEY`; `scripts/db_admin.py` is the client |
 | `src/wabot/config.py` | `Settings`: every value from `.env` |
 | `src/wabot/logs.py` | Logging: the level (`LOG_LEVEL`), the console and a rotating file (`LOG_FILE`, 5 MB × 4) that also gets uvicorn's request lines; libraries that would print the Telegram token stay at WARNING |
@@ -176,6 +177,21 @@ Telegram ──POST /telegram/webhook──► main.receive_telegram()
 - **The bot token is in every API URL** (`api.telegram.org/bot<token>/sendMessage`). `telegram._call()` raises `TelegramError` with Telegram's own description and hides httpx's exception (which carries the URL); httpx's request logging is off. A failed send is logged as e.g. `sendMessage: 403 Forbidden: bot was blocked by the user`.
 - **Voice messages** need no "yanek": they're sent to the bot only, and nobody says the name into one. Telegram doesn't transcribe for bots (only Premium users, in the app), so `voice.py` downloads the recording and OpenAI transcribes it; the transcript is the stored text, so from then on a voice message is read exactly like a typed one (history, the dashboard, corrections). `called_again()` counts a later voice message as calling the bot too. The model sees it as "[wiadomość głosowa, transkrypcja] …". It's transcribed in the webhook, before storing, so no reply ever reads a voice message without its text; that makes the webhook take a few seconds for a voice message. The audio isn't kept.
 - **One history across channels**: `recent_history()` reads the trainee's messages whatever their channel, so a trainee who moves from WhatsApp to Telegram keeps the context.
+
+### Yola (an experiment)
+
+A message that mentions "yola" (`yola.calls_yola()`: "yola", "yoli", "yolu", ...; not "yolo"), from a trainee in `YOLA_TRAINEE_IDS`, leaves `receive_telegram()` right after the voice transcription, before anything is stored (`main.conversation_with_yola()`):
+
+```
+receive_telegram() ── "yola ..." from an allowed trainee ──► yola.answer(settings, chat_id, text)
+  ├─ "yola reset" → forget the chat, answer "Okej, zaczynamy od nowa."
+  ├─ _ask(): OpenAI (OPENAI_MODEL) with yola.PROMPT and the chat's memory (last 20 messages,
+  │          in this process only: gone after a restart), store=False; failure → yola.FAILED
+  ├─ wait until YOLA_DELAY seconds (default 30) have passed since the message came in
+  └─ telegram.send_text(), in pieces of at most 4096 characters
+```
+
+Nothing goes to the database, so Yanek's history, his waiting messages and the dashboard never see Yola. No dedup: a Telegram redelivery is answered again. On Cloud Run the wait happens inside the webhook's request (`after_storing()` with `REPLY_IN_REQUEST`).
 
 ## Flow 1c: on Cloud Run
 

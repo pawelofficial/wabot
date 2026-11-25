@@ -25,6 +25,7 @@ from wabot import (
     trainees,
     voice,
     whatsapp,
+    yola,
 )
 from wabot.config import Settings, get_settings
 from wabot.dashboard import routes as dashboard
@@ -255,6 +256,11 @@ async def receive_telegram(
         else:
             text = " ".join(filter(None, [msg.text, transcript]))
             stored.body = text
+    if notice is None and conversation_with_yola(settings, trainee, text):
+        # Plain GPT instead of Yanek (yola.py): not stored, so Yanek never reads it.
+        log.info("Telegram message %s from trainee %s: for Yola", msg.external_id, trainee.id)
+        await after_storing(settings, background, yola.answer, settings, msg.chat_id, text)
+        return {"status": "ok"}
     if notice is not None:
         # The shared number, /start or an untranscribed voice message: answered by the fixed
         # text, not a report, so the next reply doesn't read it as a new message.
@@ -278,6 +284,11 @@ async def receive_telegram(
             settings, background, send_telegram_notice, msg.chat_id, *notice, trainee_id
         )
     return {"status": "ok"}
+
+
+def conversation_with_yola(settings: Settings, trainee: Trainee, text: str | None) -> bool:
+    """A message for Yola (yola.py): it mentions her, from a trainee who may talk to her."""
+    return yola.calls_yola(text) and settings.yola_allowed(trainee.id)
 
 
 def log_inbound(channel: str, stored: Message, trainee: Trainee | None, text: str | None) -> None:
